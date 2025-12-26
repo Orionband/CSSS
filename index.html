@@ -1,0 +1,118 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSSS</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- AUTH VIEW (Centered) -->
+    <div id="auth-view" class="center-wrapper">
+        <div class="auth-box">
+            <div style="text-align: center; margin-bottom: 30px;">
+                <h1>CSSS <span>ENGINE</span></h1>
+                <p style="color: var(--text-dim)">Cisco Server-sided Scoring System</p>
+            </div>
+            
+            <div class="componentContainer">
+                <!-- Login Form -->
+                <div id="login-form">
+                    <h2>Login</h2>
+                    <input type="text" id="l-user" placeholder="Username">
+                    <input type="password" id="l-pass" placeholder="Password">
+                    <button onclick="login()">Login »</button>
+                    <div class="auth-link">
+                        Don't have an account? <a onclick="toggleAuth('register')">Register</a>
+                    </div>
+                </div>
+
+                <!-- Register Form -->
+                <div id="register-form" class="hidden">
+                    <h2>Register</h2>
+                    <input type="text" id="r-user" placeholder="Username">
+                    <input type="email" id="r-email" placeholder="Email">
+                    <input type="password" id="r-pass" placeholder="Password">
+                    <button onclick="register()">Create Account »</button>
+                    <div class="auth-link">
+                        Already have an account? <a onclick="toggleAuth('login')">Login</a>
+                    </div>
+                </div>
+
+                <div id="auth-error" class="error-msg"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- APP VIEW (Navbar + Content) -->
+    <div id="app-view" class="hidden">
+        <nav class="navbar">
+            <div class="nav-brand">CSSS <span>ENGINE</span></div>
+            <div class="nav-links">
+                <div class="nav-item active" id="nav-grader" onclick="switchTab('grader')">Challenges</div>
+                <div class="nav-item" id="nav-history" onclick="switchTab('history')">History</div>
+            </div>
+            <div class="nav-right">
+                <div id="uid-display" style="color: var(--text-dim); font-size: 0.9rem; font-family: monospace;"></div>
+                <a onclick="logout()">LOGOUT</a>
+            </div>
+        </nav>
+
+        <div class="main-content">
+            
+            <!-- GRADER SECTION -->
+            <div id="view-grader">
+                <div class="componentContainer">
+                    <h2>Submit Challenge</h2>
+                    <p>Upload your Packet Tracer file (.pka/.pkt) to be graded.</p>
+                    
+                    <div class="upload-area" onclick="document.getElementById('f').click()">
+                        <div style="font-size: 3rem; color: var(--accent); margin-bottom: 15px;">📂</div>
+                        <div style="font-weight: bold; font-size: 1.1rem;">CLICK TO SELECT FILE</div>
+                        <div style="color: var(--text-dim); font-size: 0.9rem; margin-top: 5px;">.pka or .pkt files supported</div>
+                        <input type="file" id="f" style="display:none" accept=".pka,.pkt">
+                    </div>
+
+                    <div id="progress-container"><div id="progress-bar"></div></div>
+                    <div id="status"></div>
+                </div>
+
+                <div id="report" class="componentContainer hidden">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:15px; margin-bottom:15px;">
+                        <h2 style="margin:0">Results</h2>
+                        <div id="final-score" style="font-size:2rem; font-weight:bold; color:var(--accent)"></div>
+                    </div>
+                    <div id="checks-list"></div>
+                </div>
+            </div>
+
+            <!-- HISTORY SECTION -->
+            <div id="view-history" class="hidden">
+                <div class="componentContainer">
+                    <h2>Submission History</h2>
+                    <div id="history-list">Loading...</div>
+                </div>
+
+                <!-- History Detail Modal (Inline) -->
+                <div id="history-detail" class="componentContainer hidden">
+                    <div style="display:flex; justify-content:space-between; border-bottom:1px solid #333; padding-bottom:15px; margin-bottom:15px;">
+                        <div>
+                            <h2 style="margin:0">Details</h2>
+                            <span id="hist-date" style="color:var(--text-dim); font-size:0.9rem"></span>
+                        </div>
+                        <div id="hist-score" style="font-size:2rem; font-weight:bold; color:var(--accent)"></div>
+                    </div>
+                    <div id="hist-checks"></div>
+                    <button class="btn-secondary" onclick="closeHistory()" style="margin-top:20px; width: auto;">« Back to History</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
