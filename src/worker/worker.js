@@ -8,7 +8,7 @@ const { evaluateCondition } = require('./grading');
 
 (async () => {
     try {
-        const { fileData, configData } = workerData;
+        const { fileData, configData, labId } = workerData;
         const inputBuffer = Buffer.from(fileData);
         const totalBytes = inputBuffer.length;
         const safeTotal = totalBytes > 0 ? totalBytes : 1;
@@ -58,7 +58,11 @@ const { evaluateCondition } = require('./grading');
         }
 
         report("Grading...", 90);
-        const conf = toml.parse(configData);
+        const fullConfig = toml.parse(configData);
+        
+        const labConfig = (fullConfig.labs || []).find(l => l.id === labId);
+        if (!labConfig) throw new Error("Lab configuration not found");
+
         const parser = new xml2js.Parser();
         const xmlObj = await parser.parseStringPromise(finalXML);
         
@@ -80,7 +84,9 @@ const { evaluateCondition } = require('./grading');
         const serverResults = [];
         const clientResults = [];
 
-        conf.check.forEach(check => {
+        const checks = labConfig.checks || [];
+
+        checks.forEach(check => {
             const pts = parseInt(check.points);
             if (pts > 0) maxScore += pts;
             
@@ -116,7 +122,8 @@ const { evaluateCondition } = require('./grading');
         if (currentScore < 0) currentScore = 0;
         report("Complete", 100);
 
-        const clientBreakdown = (conf.options && conf.options.show_check_messages) ? clientResults : [];
+        const showMsgs = (labConfig.show_check_messages !== false);
+        const showScore = (labConfig.show_score !== false);
 
         parentPort.postMessage({
             type: 'result',
@@ -124,9 +131,10 @@ const { evaluateCondition } = require('./grading');
             grading: {
                 total: currentScore,
                 max: maxScore,
-                clientBreakdown: clientBreakdown,
+                // FIX: Send NULL if hidden, otherwise send the array (even if empty)
+                clientBreakdown: showMsgs ? clientResults : null,
                 serverBreakdown: serverResults,
-                options: conf.options || {}
+                show_score: showScore
             }
         });
 

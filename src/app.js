@@ -24,9 +24,7 @@ app.use(session({
     cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-// Serve Static Files (CSS/JS) from root
 app.use(express.static(path.join(__dirname, '../')));
-
 app.use('/api', authRoutes);
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../index.html')));
 
@@ -43,25 +41,33 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('upload_file', (fileData) => {
+    socket.on('upload_file', (packet) => {
         if (!socketUser) return socket.emit('err', "Unauthorized");
-
-        const opts = getConfig().options || {};
+        
+        const fileData = packet.fileData || packet;
+        const cfg = getConfig();
+        const labs = cfg.labs || [];
+        const labId = packet.labId || (labs.length > 0 ? labs[0].id : null);
+        const opts = cfg.options || {};
         const userId = socketUser.id;
 
+        if (!labId) return socket.emit('err', "No configuration loaded.");
+
+        const targetLab = labs.find(l => l.id === labId);
+        if (!targetLab) return socket.emit('err', "Invalid Lab ID");
+
         if (opts.max_submissions > 0) {
-            const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ?').get(userId).c;
+            const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(userId, labId).c;
             if (count >= opts.max_submissions) return socket.emit('err', "Submission limit reached.");
         }
-
         if (opts.rate_limit_count > 0) {
             const win = opts.rate_limit_window_seconds || 60;
-            const recent = db.prepare(`SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND timestamp > datetime('now', '-${win} seconds')`).get(userId).c;
+            const recent = db.prepare("SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')").get(userId, win).c;
             if (recent >= opts.rate_limit_count) return socket.emit('err', "Rate limit exceeded.");
         }
 
         const worker = new Worker(path.join(__dirname, 'worker/worker.js'), { 
-            workerData: { fileData, configData: getRawConfig() } 
+            workerData: { fileData, configData: getRawConfig(), labId: labId } 
         });
 
         worker.on('message', (msg) => {
@@ -69,14 +75,18 @@ io.on('connection', (socket) => {
             else if (msg.type === 'result') {
                 const { grading } = msg;
                 const timestamp = Date.now();
-                const capturesDir = path.join(__dirname, '../../captures');
+                // FIX: Path was pointing outside project. Changed to ../captures
+                const capturesDir = path.join(__dirname, '../captures');
 
-                db.prepare('INSERT INTO submissions (user_id, unique_id, score, max_score, details) VALUES (?, ?, ?, ?, ?)')
-                  .run(userId, socketUser.unique_id, grading.total, grading.max, JSON.stringify(grading.serverBreakdown));
+                db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details) VALUES (?, ?, ?, ?, ?, ?)')
+                  .run(userId, socketUser.unique_id, labId, grading.total, grading.max, JSON.stringify(grading.serverBreakdown));
 
                 if (opts.retain_pka || opts.retain_xml) {
-                    if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir);
-                    const baseName = `${socketUser.unique_id}_${timestamp}`;
+                    if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
+                    
+                    const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
+                    const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
+                    
                     if (opts.retain_pka) fs.writeFileSync(path.join(capturesDir, `${baseName}.pka`), Buffer.from(fileData));
                     if (opts.retain_xml) fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
                 }
@@ -96,4 +106,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = 3000;
-server.listen(PORT, () => console.log(`🚀 CSSS Server running on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`CSSS Server running on http://localhost:${PORT}`));

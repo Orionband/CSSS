@@ -14,6 +14,7 @@ function generateUniqueId() {
     return result;
 }
 
+// --- AUTH ---
 router.post('/register', async (req, res) => {
     const { username, email, password } = req.body;
     if (!username || !email || !password) return res.status(400).json({ error: "Missing fields" });
@@ -51,32 +52,72 @@ router.get('/me', (req, res) => {
     res.json({ id: req.session.userId, unique_id: req.session.uniqueId });
 });
 
+// --- DATA ---
+router.get('/config', (req, res) => {
+    const cfg = getConfig();
+    const safeLabs = (cfg.labs || []).map(l => ({ id: l.id, title: l.title }));
+    res.json({ 
+        labs: safeLabs,
+        options: { show_leaderboard: cfg.options?.show_leaderboard !== false }
+    });
+});
+
+router.get('/leaderboard', (req, res) => {
+    const cfg = getConfig();
+    if (cfg.options?.show_leaderboard === false) {
+        return res.status(403).json({ error: "Leaderboard disabled" });
+    }
+    const labs = cfg.labs || [];
+    const users = db.prepare('SELECT id, username FROM users').all();
+    const leaderboard = [];
+    users.forEach(u => {
+        let total = 0;
+        const scores = {};
+        labs.forEach(lab => {
+            const row = db.prepare('SELECT MAX(score) as s FROM submissions WHERE user_id = ? AND lab_id = ?').get(u.id, lab.id);
+            const score = row && row.s !== null ? row.s : 0;
+            scores[lab.id] = score;
+            total += score;
+        });
+        if (total > 0) {
+            leaderboard.push({ username: u.username, scores: scores, total_score: total });
+        }
+    });
+    leaderboard.sort((a, b) => b.total_score - a.total_score);
+    const labHeaders = labs.map(l => ({ id: l.id, title: l.title }));
+    res.json({ success: true, labs: labHeaders, leaderboard: leaderboard });
+});
+
 router.get('/history', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    try {
-        const submissions = db.prepare(`SELECT id, score, max_score, timestamp, details FROM submissions WHERE user_id = ? ORDER BY id DESC`).all(req.session.userId);
-        const opts = getConfig().options || {};
-        const showCheckMessages = opts.show_check_messages !== false;
-        const showScore = opts.show_score !== false;
-        const safeSubmissions = submissions.map(sub => {
-            let details = [];
-            try { details = JSON.parse(sub.details); } catch(e) {}
-            const clientDetails = details.filter(item => {
-                const isPenalty = item.possible < 0;
-                return isPenalty ? item.awarded < 0 : item.awarded > 0;
-            }).map(item => ({ message: item.message, points: item.awarded }));
-            return {
-                id: sub.id,
-                score: showScore ? sub.score : null,
-                max_score: showScore ? sub.max_score : null,
-                timestamp: sub.timestamp,
-                details: showCheckMessages ? clientDetails : []
-            };
-        });
-        res.json({ success: true, history: safeSubmissions });
-    } catch (err) {
-        res.status(500).json({ error: "DB Error" });
-    }
+    
+    const cfg = getConfig();
+    const submissions = db.prepare('SELECT id, lab_id, score, max_score, timestamp, details FROM submissions WHERE user_id = ? ORDER BY id DESC').all(req.session.userId);
+    
+    const safeSubmissions = submissions.map(sub => {
+        const labCfg = (cfg.labs || []).find(l => l.id === sub.lab_id);
+        const showChecks = labCfg ? (labCfg.show_check_messages !== false) : true;
+        const showScore = labCfg ? (labCfg.show_score !== false) : true;
+
+        let details = [];
+        try { details = JSON.parse(sub.details); } catch(e) {}
+        
+        const clientDetails = details.filter(item => {
+            const isPenalty = item.possible < 0;
+            return isPenalty ? item.awarded < 0 : item.awarded > 0;
+        }).map(item => ({ message: item.message, points: item.awarded }));
+        
+        // FIX: Return NULL if hidden, otherwise array
+        return {
+            id: sub.id,
+            lab_id: sub.lab_id,
+            score: showScore ? sub.score : null,
+            max_score: showScore ? sub.max_score : null,
+            timestamp: sub.timestamp,
+            details: showChecks ? clientDetails : null
+        };
+    });
+    res.json({ success: true, history: safeSubmissions });
 });
 
 module.exports = router;

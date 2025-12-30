@@ -83,8 +83,6 @@ button:active { transform: translateY(1px); outline: none; }
 .btn-secondary:hover { background: #555; }
 
 /* --- LAYOUTS --- */
-
-/* Centered Layout (Login/Home) */
 .center-wrapper {
     display: flex;
     height: 100vh;
@@ -94,13 +92,8 @@ button:active { transform: translateY(1px); outline: none; }
     background: radial-gradient(circle at center, #1a1a1a 0%, #101010 100%);
 }
 
-.auth-box {
-    width: 400px;
-    max-width: 90%;
-    text-align: left;
-}
+.auth-box { width: 400px; max-width: 90%; text-align: left; }
 
-/* Navbar Layout (App) */
 .navbar {
     display: flex;
     padding: 20px 40px;
@@ -115,19 +108,13 @@ button:active { transform: translateY(1px); outline: none; }
 .nav-links { display: flex; gap: 30px; }
 .nav-item { cursor: pointer; color: var(--text-dim); user-select: none; text-transform: uppercase; font-size: 0.9rem; font-weight: bold; transition: color 0.2s; }
 .nav-item:hover { color: var(--text); }
-.nav-item.active { color: var(--accent); }
+.nav-item.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
 
 .nav-right { margin-left: auto; display: flex; gap: 20px; align-items: center; }
 
-.main-content {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 0 20px 40px 20px;
-}
+.main-content { max-width: 900px; margin: 0 auto; padding: 0 20px 40px 20px; }
 
 /* --- SPECIFIC ELEMENTS --- */
-
-/* Upload Area */
 .upload-area {
     border: 2px dashed #444;
     padding: 50px;
@@ -140,16 +127,12 @@ button:active { transform: translateY(1px); outline: none; }
 }
 .upload-area:hover { border-color: var(--accent); background: rgba(240, 93, 94, 0.05); }
 
-/* Progress Bar */
 #progress-container { 
     width: 100%; background: var(--input-bg); height: 12px; 
     border-radius: 6px; overflow: hidden; margin-top: 15px; display: none; 
 }
 #progress-bar { width: 0%; height: 100%; background: var(--accent); transition: width 0.2s; }
 #status { margin-top: 10px; color: var(--text-dim); font-size: 0.9rem; text-align: center; }
-
-/* Grading Report */
-.score-display { font-size: 3rem; color: var(--accent); font-weight: bold; margin-bottom: 20px; }
 
 .check-item { 
     display: flex; justify-content: space-between; padding: 15px; 
@@ -160,18 +143,21 @@ button:active { transform: translateY(1px); outline: none; }
 .penalty { border-left: 4px solid var(--accent); background: rgba(240,93,94,0.05); }
 .pts { font-weight: bold; font-family: 'Roboto Mono'; font-size: 1.1rem; }
 
-/* History List */
 .history-row {
     display: flex; justify-content: space-between; padding: 15px;
     border-bottom: 1px solid #333; cursor: pointer; transition: background 0.1s;
+    align-items: center;
 }
 .history-row:hover { background: #333; }
 .hist-score { color: var(--accent); font-weight: bold; }
-.hist-date { color: var(--text-dim); }
+.hist-date { color: var(--text-dim); font-size: 0.8rem; margin-top: 4px; }
 
-/* Auth Toggle */
+/* LEADERBOARD TABLE */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 10px; border-bottom: 2px solid #333; color: var(--text-dim); text-transform: uppercase; font-size: 0.9rem; }
+td { padding: 15px 10px; border-bottom: 1px solid #333; }
+tr:last-child td { border-bottom: none; }
+
 .auth-link { margin-top: 15px; font-size: 0.9rem; text-align: center; color: var(--text-dim); }
-
-/* Utility */
 .hidden { display: none !important; }
 .error-msg { color: var(--accent); margin-top: 15px; text-align: center; font-weight: bold; }
