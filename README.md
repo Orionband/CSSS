@@ -1,4 +1,4 @@
-# CSSS Documentation
+﻿# CSSS Documentation
 
 ## Running the Server
 
@@ -20,217 +20,151 @@ To start the grading environment, follow these steps using your terminal or Powe
     Open your web browser and navigate to:
     `http://localhost:3000`
 
-## Configuration Fields
+## Global Configuration
 
-The behavior of the grading engine is controlled by the `lab.conf` file. These options go in the `[options]` block or at the top level of the file.
-
-**show_check_messages**: Determines if the specific messages for passed or failed checks are displayed to the user in the report.
+The behavior of the grading engine is controlled by the `lab.conf` file. The `[options]` block controls server-wide settings.
 
 ```toml
-show_check_messages = true
-```
-
-**show_score**: Determines if the numeric score (e.g., 50/100) is displayed to the user.
-
-```toml
-show_score = true
-```
-
-**retain_pka**: If true, the server saves the original `.pka` file uploaded by the student to the `captures` directory.
-
-```toml
-retain_pka = true
-```
-
-**retain_xml**: If true, the server saves the decrypted `.xml` file to the `captures` directory. This is useful for debugging hardware paths during lab creation.
-
-```toml
-retain_xml = false
-```
-
-**max_submissions**: Sets a hard limit on how many times a specific user can submit files. Set to `0` for infinite submissions.
-
-```toml
+[options]
+# Limits submissions per user (0 = infinite)
 max_submissions = 0
-```
 
-**rate_limit_count**: The number of submissions allowed within a specific time window. Used to prevent spam or brute-forcing.
-
-```toml
+# Rate limiting (submissions per window)
 rate_limit_count = 5
-```
-
-**rate_limit_window_seconds**: The duration (in seconds) for the rate limit window.
-
-```toml
 rate_limit_window_seconds = 60
+
+# File Retention
+# Saves files to 'captures/' as [LabTitle]_[UniqueId]_[Timestamp].pka
+retain_pka = true
+retain_xml = false
+
+# Leaderboard Control
+# If true, a Leaderboard tab is shown aggregating scores across all labs.
+show_leaderboard = true
 ```
 
-**title**: The title of the lab activity, displayed in the report header.
+## Defining Labs (Multi-Lab Support)
+
+You can define multiple challenges/labs in a single config file. Each lab defined in a `[[labs]]` block will appear as a separate tab in the user interface.
+
+### Lab Properties
+*   **id**: A unique string identifier for the lab (no spaces recommended, e.g., "lab1").
+*   **title**: The display name shown on the tab and reports.
+*   **show_score**: Show the numeric score (e.g., 80/100).
+*   **show_check_messages**: Show the specific pass/fail feedback items.
+
+### Example Lab Structure
 
 ```toml
-title = "CCNA Security Final"
+[[labs]]
+id = "routing_basics"
+title = "Lab 1: Routing"
+show_score = true
+show_check_messages = true
+
+    # Checks for this specific lab go here
+    [[labs.checks]]
+    message = "Hostname Configured"
+    points = 10
+    device = "R1"
+        [[labs.checks.pass]]
+        type = "ConfigMatch"
+        source = "running"
+        context = "global"
+        value = "hostname R1"
 ```
 
-## Penalties
+## Leaderboard System
 
-Assign a check a negative point value, and it will become a penalty.
+The leaderboard calculates the **Total Score** for each user.
+1.  It takes the **Maximum Score** achieved by the user for *each* individual lab.
+2.  It sums these maximums together.
+3.  The leaderboard table displays the breakdown of scores per lab and the total.
 
-If the check **passes** (the condition is found), the negative points are added to the score (subtracting from the total).
-If the check **fails** (the condition is NOT found), 0 points are added.
+To disable the leaderboard globally, set `show_leaderboard = false` in the `[options]` block.
 
-Example:
+## Checks and Logic
 
+Checks are defined within a specific lab using `[[labs.checks]]`.
+
+### Penalties
+Assign a check a negative point value.
+*   **Pass**: Points are subtracted (e.g., -10 added to score).
+*   **Fail**: 0 points added.
+
+### Conditions & Precedence
+You can chain conditions to create complex logic.
+
+1.  **Fail Conditions**: If *any* match, the check fails immediately.
+2.  **PassOverride**: If *any* match, the check passes immediately (OR logic).
+3.  **Pass**: *All* must match for the check to pass (AND logic).
+
+**Example:**
 ```toml
-[[check]]
-message = "Security Violation: HTTP Server Enabled"
-points = -10
-device = "R1"
-
-    # If this line is found, the user loses 10 points
-    [[check.pass]]
-    type = "ConfigMatch"
-    source = "running"
-    context = "global"
-    value = "ip http server"
-```
-
-## Check Conditions and Precedence
-
-Using multiple conditions for a check allows for complex logic, such as allowing alternative configurations or ensuring absolute restrictions.
-
-Given no conditions, a check does not pass.
-
-If any **Fail** conditions succeed, the check does not pass.
-
-**PassOverride** conditions act as a logical OR. This means that any can succeed for the check to pass.
-
-**Pass** conditions act as a logical AND. This means they must ALL be true for a check to pass.
-
-If the outcome of a check is decided, the engine will NOT execute the remaining conditions (it will "short circuit"). For example, if a PassOverride succeeds, any Pass conditions are NOT executed.
-
-The evaluation goes like this:
-1. Check if any Fail conditions are true. If any Fail checks succeed, then we are done, the check doesn't pass.
-2. Check if any PassOverride conditions pass. If they do, we are done, the check passes.
-3. Check status of all Pass conditions. If they all succeed, the check passes, otherwise it fails.
-
-Example:
-
-```toml
-[[check]]
-message = "R1 OSPF Configuration"
+[[labs.checks]]
+message = "OSPF Configured"
 points = 10
 device = "R1"
 
-    # FAIL if the interface is shutdown
-    [[check.fail]]
+    # FAIL if shutdown
+    [[labs.checks.fail]]
     type = "ConfigMatch"
     source = "running"
-    context = "interface GigabitEthernet0/0"
+    context = "interface g0/0"
     value = "shutdown"
 
-    # PASS immediately if OSPF is on the interface (Modern style)
-    [[check.passoverride]]
+    # PASS if modern syntax used
+    [[labs.checks.passoverride]]
     type = "ConfigMatch"
     source = "running"
-    context = "interface GigabitEthernet0/0"
+    context = "interface g0/0"
     value = "ip ospf 1 area 0"
-    
-    # OR pass if Network command is used (Classic style)
-    [[check.pass]]
+
+    # OR PASS if legacy syntax used
+    [[labs.checks.pass]]
     type = "ConfigMatch"
     source = "running"
     context = "router ospf 1"
     value = "network 192.168.1.0 0.0.0.255 area 0"
 ```
 
-## Checks
+## Check Types
 
-This is a list of check types available in the grading engine.
-
-**ConfigMatch**: Pass if the configuration line exists exactly as written.
-
+**ConfigMatch**: Exact string match in configuration.
 ```toml
 type = "ConfigMatch"
-value = "hostname Router1"
+value = "hostname R1"
+# Start with ^ for regex: value = "^hostname R.*"
 ```
 
-> **Note**: If the value starts with `^`, it is treated as a Regex.
-
-**ConfigContains**: Pass if the configuration line contains the specified substring.
-
+**ConfigContains**: Checks if line contains substring.
 ```toml
 type = "ConfigContains"
-value = "Staff Network"
+value = "description Link to ISP"
 ```
 
-> Useful for descriptions where whitespace or exact casing might vary.
-
-**ConfigRegex**: Pass if the configuration line matches the provided Regular Expression.
-
+**ConfigRegex**: Matches line against a Regular Expression.
 ```toml
 type = "ConfigRegex"
 value = "^enable secret 5 \\$1\\$.*"
+# Note: Double escape backslashes in TOML
 ```
 
-> **Note**: You must double-escape backslashes in TOML strings (e.g. `\\d` for a digit).
-
-**XmlMatch**: Pass if the raw XML value at the specified path equals the value. Used for hardware checks (cabling, power, modules).
-
+**XmlMatch**: Checks hardware/physical attributes in the .pka XML.
 ```toml
 type = "XmlMatch"
-path = ["MODULE", "0", "SLOT", "0", "PORT", "0", "BANDWIDTH", "0"]
-value = "1000000"
+path = ["MODULE", "0", "SLOT", "0", "PORT", "0"]
+value = "1000"
 ```
 
-> **Note**: The path is an array of strings. Even array indices in the XML (like 0) must be passed as strings (e.g., `"0"`).
+## Contexts
 
-## Contexts and Sources
+When using Config checks, `context` defines where to look.
 
-When using Config checks (`ConfigMatch`, `ConfigContains`, `ConfigRegex`), you must specify the **source** and **context**.
+*   `global`: Top level (hostname, banner, etc).
+*   `interface [name]`: Specific interface block.
+*   `router [proto]`: Routing protocol block.
+*   `line [type]`: Line VTY/Console block.
 
-### Sources
-
-**running**: Checks the active Running Configuration (RAM).
-
-```toml
-source = "running"
-```
-
-**startup**: Checks the Startup Configuration (NVRAM). Use this to ensure students have saved their configurations.
-
-```toml
-source = "startup"
-```
-
-### Contexts
-
-**global**: Top-level commands.
-
-```toml
-context = "global"
-# Matches: hostname, banner, ip route, etc.
-```
-
-**interface**: Specific interface blocks.
-
-```toml
-context = "interface GigabitEthernet0/0"
-# Matches: ip address, description, shutdown
-```
-
-> The engine normalizes whitespace, so `interface g0/0` may match `interface GigabitEthernet0/0` depending on internal mapping, but it is safest to use the full name as it appears in the `show run` output.
-
-**router**: Routing protocol blocks.
-
-```toml
-context = "router ospf 1"
-# Matches: network, auto-cost, passive-interface
-```
-
-**line**: Console or VTY line blocks.
-
-```toml
-context = "line vty 0 4"
-# Matches: password, login local, transport input ssh
-```
+## Free Servers
+*    [Koyeb](https://www.koyeb.com/) and [Render](https://render.com/) work for this, but both will shut off after a certain amount of time, but you can avoid this by using [cron-job](https://console.cron-job.org/login)
