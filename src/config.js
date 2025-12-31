@@ -2,21 +2,33 @@
 const toml = require('toml');
 const path = require('path');
 
-let config = { options: {}, labs: [] };
-let rawConfig = "";
+let config = { options: {}, labs: [], quizzes: [] };
+let rawConfig = ""; // Lab raw config (for worker)
 
 function reloadConfig() {
     try {
-        const configPath = path.resolve(__dirname, '../lab.conf');
-        if (!fs.existsSync(configPath)) {
-            throw new Error(`File not found at: ${configPath}`);
+        // Load Lab Config
+        const labPath = path.resolve(__dirname, '../lab.conf');
+        if (fs.existsSync(labPath)) {
+            rawConfig = fs.readFileSync(labPath, 'utf-8');
+            if (rawConfig.charCodeAt(0) === 0xFEFF) { rawConfig = rawConfig.slice(1); }
+            const parsedLab = toml.parse(rawConfig);
+            config.options = parsedLab.options || {};
+            config.labs = parsedLab.labs || [];
         }
-        rawConfig = fs.readFileSync(configPath, 'utf-8');
-        if (rawConfig.charCodeAt(0) === 0xFEFF) { rawConfig = rawConfig.slice(1); }
-        config = toml.parse(rawConfig);
-        console.log("CSSS Config loaded.");
+
+        // Load Quiz Config
+        const quizPath = path.resolve(__dirname, '../quiz.conf');
+        if (fs.existsSync(quizPath)) {
+            let quizRaw = fs.readFileSync(quizPath, 'utf-8');
+            if (quizRaw.charCodeAt(0) === 0xFEFF) { quizRaw = quizRaw.slice(1); }
+            const parsedQuiz = toml.parse(quizRaw);
+            config.quizzes = parsedQuiz.quizzes || [];
+        }
+
+        console.log(`CSSS Config loaded. ${config.labs.length} Labs, ${config.quizzes.length} Quizzes.`);
     } catch (e) {
-        console.warn("WARNING: lab.conf error.");
+        console.warn("WARNING: Config error.");
         console.error(`   Details: ${e.message}`);
     }
 }

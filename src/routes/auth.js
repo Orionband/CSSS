@@ -14,7 +14,6 @@ function generateUniqueId() {
     return result;
 }
 
-// --- AUTH ---
 router.post('/register', async (req, res) => {
     const { username, email, password } = req.body;
     if (!username || !email || !password) return res.status(400).json({ error: "Missing fields" });
@@ -52,12 +51,17 @@ router.get('/me', (req, res) => {
     res.json({ id: req.session.userId, unique_id: req.session.uniqueId });
 });
 
-// --- DATA ---
+// Merged Config (Labs + Quizzes)
 router.get('/config', (req, res) => {
     const cfg = getConfig();
-    const safeLabs = (cfg.labs || []).map(l => ({ id: l.id, title: l.title }));
+    const safeLabs = (cfg.labs || []).map(l => ({ id: l.id, title: l.title, type: 'lab' }));
+    
+    const safeQuizzes = (cfg.quizzes || [])
+        .filter(q => q.enabled !== false)
+        .map(q => ({ id: q.id, title: q.title, type: 'quiz' }));
+
     res.json({ 
-        labs: safeLabs,
+        challenges: [...safeLabs, ...safeQuizzes],
         options: { show_leaderboard: cfg.options?.show_leaderboard !== false }
     });
 });
@@ -67,54 +71,79 @@ router.get('/leaderboard', (req, res) => {
     if (cfg.options?.show_leaderboard === false) {
         return res.status(403).json({ error: "Leaderboard disabled" });
     }
+    
+    // Combine IDs
     const labs = cfg.labs || [];
+    const quizzes = (cfg.quizzes || []).filter(q => q.enabled !== false);
+    const allChallenges = [...labs, ...quizzes];
+
     const users = db.prepare('SELECT id, username FROM users').all();
     const leaderboard = [];
+
     users.forEach(u => {
         let total = 0;
         const scores = {};
-        labs.forEach(lab => {
-            const row = db.prepare('SELECT MAX(score) as s FROM submissions WHERE user_id = ? AND lab_id = ?').get(u.id, lab.id);
+        allChallenges.forEach(ch => {
+            const row = db.prepare('SELECT MAX(score) as s FROM submissions WHERE user_id = ? AND lab_id = ?').get(u.id, ch.id);
             const score = row && row.s !== null ? row.s : 0;
-            scores[lab.id] = score;
+            scores[ch.id] = score;
             total += score;
         });
         if (total > 0) {
             leaderboard.push({ username: u.username, scores: scores, total_score: total });
         }
     });
+
     leaderboard.sort((a, b) => b.total_score - a.total_score);
-    const labHeaders = labs.map(l => ({ id: l.id, title: l.title }));
-    res.json({ success: true, labs: labHeaders, leaderboard: leaderboard });
+    const headers = allChallenges.map(c => ({ id: c.id, title: c.title }));
+    res.json({ success: true, labs: headers, leaderboard: leaderboard });
 });
 
 router.get('/history', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Not logged in" });
     
     const cfg = getConfig();
-    const submissions = db.prepare('SELECT id, lab_id, score, max_score, timestamp, details FROM submissions WHERE user_id = ? ORDER BY id DESC').all(req.session.userId);
+    const submissions = db.prepare('SELECT id, lab_id, score, max_score, timestamp, details, type FROM submissions WHERE user_id = ? ORDER BY id DESC').all(req.session.userId);
     
     const safeSubmissions = submissions.map(sub => {
-        const labCfg = (cfg.labs || []).find(l => l.id === sub.lab_id);
-        const showChecks = labCfg ? (labCfg.show_check_messages !== false) : true;
-        const showScore = labCfg ? (labCfg.show_score !== false) : true;
+        let showScore = true;
+        let showDetails = true;
+        let type = sub.type || 'lab';
+
+        if (type === 'quiz') {
+            const qCfg = (cfg.quizzes || []).find(q => q.id === sub.lab_id);
+            showScore = qCfg ? (qCfg.show_score !== false) : true;
+            showDetails = qCfg ? (qCfg.show_corrections !== false) : true;
+        } else {
+            const lCfg = (cfg.labs || []).find(l => l.id === sub.lab_id);
+            showScore = lCfg ? (lCfg.show_score !== false) : true;
+            showDetails = lCfg ? (lCfg.show_check_messages !== false) : true;
+        }
 
         let details = [];
         try { details = JSON.parse(sub.details); } catch(e) {}
         
-        const clientDetails = details.filter(item => {
-            const isPenalty = item.possible < 0;
-            return isPenalty ? item.awarded < 0 : item.awarded > 0;
-        }).map(item => ({ message: item.message, points: item.awarded }));
+        // Security filter for labs, passed through for quiz if enabled
+        let clientDetails = null;
+        if (showDetails) {
+            if (type === 'quiz') {
+                clientDetails = details; // Quiz details already formatted in route
+            } else {
+                clientDetails = details.filter(item => {
+                    const isPenalty = item.possible < 0;
+                    return isPenalty ? item.awarded < 0 : item.awarded > 0;
+                }).map(item => ({ message: item.message, points: item.awarded }));
+            }
+        }
         
-        // FIX: Return NULL if hidden, otherwise array
         return {
             id: sub.id,
             lab_id: sub.lab_id,
+            type: type,
             score: showScore ? sub.score : null,
             max_score: showScore ? sub.max_score : null,
             timestamp: sub.timestamp,
-            details: showChecks ? clientDetails : null
+            details: clientDetails
         };
     });
     res.json({ success: true, history: safeSubmissions });

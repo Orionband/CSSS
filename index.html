@@ -17,7 +17,6 @@
                 <h1>CSSS <span>ENGINE</span></h1>
                 <p style="color: var(--text-dim)">Cisco Server-sided Scoring System</p>
             </div>
-            
             <div class="componentContainer">
                 <div id="login-form">
                     <h2>Login</h2>
@@ -28,7 +27,6 @@
                         Don't have an account? <a onclick="toggleAuth('register')">Register</a>
                     </div>
                 </div>
-
                 <div id="register-form" class="hidden">
                     <h2>Register</h2>
                     <input type="text" id="r-user" placeholder="Username">
@@ -39,44 +37,45 @@
                         Already have an account? <a onclick="toggleAuth('login')">Login</a>
                     </div>
                 </div>
-
                 <div id="auth-error" class="error-msg"></div>
             </div>
         </div>
     </div>
 
-    <!-- APP VIEW -->
+    <!-- APP VIEW (Sidebar Layout) -->
     <div id="app-view" class="hidden">
-        <nav class="navbar">
-            <div class="nav-brand">CSSS <span>ENGINE</span></div>
-            <!-- Dynamic Tabs -->
-            <div class="nav-links" id="nav-links-container"></div>
-            
-            <div class="nav-right">
-                <div id="uid-display" style="color: var(--text-dim); font-size: 0.9rem; font-family: monospace;"></div>
-                <a onclick="logout()">LOGOUT</a>
+        
+        <!-- SIDEBAR -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <div class="nav-brand">CSSS <span>ENGINE</span></div>
+            </div>
+            <div class="nav-links" id="nav-links-container">
+                <!-- Links injected here -->
+            </div>
+            <div class="sidebar-footer">
+                <div id="uid-display"></div>
+                <div class="logout-btn" onclick="logout()">[ LOGOUT ]</div>
             </div>
         </nav>
 
-        <div class="main-content">
+        <!-- CONTENT -->
+        <main class="main-content">
             
-            <!-- DYNAMIC GRADER VIEW -->
+            <!-- LAB GRADER -->
             <div id="view-grader" class="hidden">
                 <div class="componentContainer">
                     <h2 id="lab-title">Challenge</h2>
                     <p>Upload your Packet Tracer file (.pka/.pkt) to be graded.</p>
-                    
                     <div class="upload-area" onclick="document.getElementById('f').click()">
                         <div style="font-size: 3rem; color: var(--accent); margin-bottom: 15px;">[ + ]</div>
                         <div style="font-weight: bold; font-size: 1.1rem;">CLICK TO SELECT FILE</div>
                         <div style="color: var(--text-dim); font-size: 0.9rem; margin-top: 5px;">.pka or .pkt files supported</div>
                         <input type="file" id="f" style="display:none" accept=".pka,.pkt">
                     </div>
-
                     <div id="progress-container"><div id="progress-bar"></div></div>
                     <div id="status"></div>
                 </div>
-
                 <div id="report" class="componentContainer hidden">
                     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:15px; margin-bottom:15px;">
                         <h2 style="margin:0">Results</h2>
@@ -86,28 +85,40 @@
                 </div>
             </div>
 
-            <!-- LEADERBOARD VIEW -->
+            <!-- QUIZ TAKER -->
+            <div id="view-quiz" class="hidden">
+                <div class="componentContainer">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px;">
+                        <h2 id="quiz-title" style="margin:0">Quiz Title</h2>
+                        <div id="quiz-timer" class="quiz-timer"></div>
+                    </div>
+                    <div id="quiz-questions-area"></div>
+                    <button onclick="submitQuiz()" id="btn-submit-quiz">Submit Answers >></button>
+                </div>
+                <div id="quiz-result" class="componentContainer hidden">
+                    <h2 style="color:var(--accent)">Quiz Results</h2>
+                    <div id="quiz-score-display" style="font-size:1.5rem; font-weight:bold; margin-bottom:20px"></div>
+                    <div id="quiz-feedback-list"></div>
+                </div>
+            </div>
+
+            <!-- LEADERBOARD -->
             <div id="view-leaderboard" class="hidden">
                 <div class="componentContainer">
                     <h2>Leaderboard</h2>
                     <table id="lb-table">
-                        <thead>
-                            <tr>
-                                <!-- DYNAMIC HEADERS INJECTED HERE -->
-                            </tr>
-                        </thead>
+                        <thead><tr><!-- DYNAMIC --></tr></thead>
                         <tbody id="lb-body"></tbody>
                     </table>
                 </div>
             </div>
 
-            <!-- HISTORY VIEW -->
+            <!-- HISTORY -->
             <div id="view-history" class="hidden">
                 <div class="componentContainer">
                     <h2>Submission History</h2>
                     <div id="history-list">Loading...</div>
                 </div>
-
                 <div id="history-detail" class="componentContainer hidden">
                     <div style="display:flex; justify-content:space-between; border-bottom:1px solid #333; padding-bottom:15px; margin-bottom:15px;">
                         <div>
@@ -122,9 +133,8 @@
                 </div>
             </div>
 
-        </div>
+        </main>
     </div>
-
     <script src="script.js"></script>
 </body>
 </html>

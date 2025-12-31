@@ -10,6 +10,7 @@ const { Worker } = require('worker_threads');
 const db = require('./database');
 const { getConfig, getRawConfig } = require('./config');
 const authRoutes = require('./routes/auth');
+const quizRoutes = require('./routes/quiz');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,8 +25,14 @@ app.use(session({
     cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
+// Serve Root (for index.html, script.js, style.css)
 app.use(express.static(path.join(__dirname, '../')));
+// Serve Public (for images)
+app.use(express.static(path.join(__dirname, '../public')));
+
 app.use('/api', authRoutes);
+app.use('/api/quiz', quizRoutes);
+
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../index.html')));
 
 io.on('connection', (socket) => {
@@ -75,18 +82,15 @@ io.on('connection', (socket) => {
             else if (msg.type === 'result') {
                 const { grading } = msg;
                 const timestamp = Date.now();
-                // FIX: Path was pointing outside project. Changed to ../captures
                 const capturesDir = path.join(__dirname, '../captures');
 
-                db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details) VALUES (?, ?, ?, ?, ?, ?)')
-                  .run(userId, socketUser.unique_id, labId, grading.total, grading.max, JSON.stringify(grading.serverBreakdown));
+                db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                  .run(userId, socketUser.unique_id, labId, grading.total, grading.max, JSON.stringify(grading.serverBreakdown), 'lab');
 
                 if (opts.retain_pka || opts.retain_xml) {
                     if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
-                    
                     const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
                     const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
-                    
                     if (opts.retain_pka) fs.writeFileSync(path.join(capturesDir, `${baseName}.pka`), Buffer.from(fileData));
                     if (opts.retain_xml) fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
                 }
