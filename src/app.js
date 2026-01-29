@@ -25,9 +25,7 @@ app.use(session({
     cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-// Serve Root (for index.html, script.js, style.css)
 app.use(express.static(path.join(__dirname, '../')));
-// Serve Public (for images)
 app.use(express.static(path.join(__dirname, '../public')));
 
 app.use('/api', authRoutes);
@@ -95,9 +93,21 @@ io.on('connection', (socket) => {
                     if (opts.retain_xml) fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
                 }
 
-                delete msg.xml;
-                delete grading.serverBreakdown;
-                socket.emit('result', grading);
+                // --- SECURITY SANITIZATION ---
+                const payload = { 
+                    total: grading.total,
+                    max: grading.max,
+                    clientBreakdown: grading.clientBreakdown,
+                    show_score: grading.show_score
+                };
+
+                // If score is hidden, scrub it from the packet entirely
+                if (!grading.show_score) {
+                    delete payload.total;
+                    delete payload.max;
+                }
+
+                socket.emit('result', payload);
                 worker.terminate();
             } else if (msg.type === 'error') {
                 socket.emit('err', msg.msg);

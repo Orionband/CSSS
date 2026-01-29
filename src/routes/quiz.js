@@ -13,7 +13,7 @@ function shuffle(array) {
     return array;
 }
 
-// Get Quiz Data
+// 1. Get Quiz Metadata ONLY (No Questions)
 router.get('/:id', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -22,16 +22,42 @@ router.get('/:id', (req, res) => {
 
     if (!quiz || quiz.enabled === false) return res.status(404).json({ error: "Quiz not found or disabled" });
 
-    // Check Max Attempts
+    // Check attempts for display
+    let attemptsTaken = 0;
+    try {
+        attemptsTaken = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
+    } catch(e) {}
+
+    res.json({
+        id: quiz.id,
+        title: quiz.title,
+        time_limit: quiz.time_limit_minutes,
+        max_attempts: quiz.max_attempts || 0,
+        attempts_taken: attemptsTaken,
+        question_count: quiz.questions.length
+    });
+});
+
+// 2. Start Quiz (Returns Questions)
+router.post('/:id/start', (req, res) => {
+    if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const cfg = getConfig();
+    const quiz = (cfg.quizzes || []).find(q => q.id === req.params.id);
+    if (!quiz || quiz.enabled === false) return res.status(404).json({ error: "Quiz not found" });
+
+    // Enforce Limits
     if (quiz.max_attempts > 0) {
         const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
         if (attempts >= quiz.max_attempts) {
-            return res.status(403).json({ error: `Maximum attempts reached (${attempts}/${quiz.max_attempts})` });
+            return res.status(403).json({ error: "Maximum attempts reached." });
         }
     }
 
+    // Sanitize Questions (Strip answers/regex/explanations)
     const safeQuestions = quiz.questions.map((q, idx) => {
         const base = { id: idx, text: q.text, type: q.type, image: q.image };
+        
         if (q.type === 'radio' || q.type === 'checkbox') {
             base.answers = q.answers.map((a, aIdx) => ({ id: aIdx, text: a.text }));
         } else if (q.type === 'matching') {
@@ -42,16 +68,10 @@ router.get('/:id', (req, res) => {
         return base;
     });
 
-    res.json({
-        id: quiz.id,
-        title: quiz.title,
-        time_limit: quiz.time_limit_minutes,
-        max_attempts: quiz.max_attempts,
-        questions: safeQuestions
-    });
+    res.json({ questions: safeQuestions });
 });
 
-// Submit Quiz
+// 3. Submit Quiz
 router.post('/:id/submit', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -59,11 +79,11 @@ router.post('/:id/submit', (req, res) => {
     const quiz = (cfg.quizzes || []).find(q => q.id === req.params.id);
     if (!quiz || quiz.enabled === false) return res.status(404).json({ error: "Quiz not found" });
 
-    // Double check limit before accepting submission
+    // Enforce limits on submission too (prevent race conditions)
     if (quiz.max_attempts > 0) {
         const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
         if (attempts >= quiz.max_attempts) {
-            return res.status(403).json({ error: "Maximum attempts reached." });
+            return res.status(403).json({ error: "Submission rejected: Limit reached." });
         }
     }
 
@@ -122,6 +142,7 @@ router.post('/:id/submit', (req, res) => {
     const showScore = quiz.show_score !== false;
     const showCorrections = quiz.show_corrections !== false;
 
+    // Secure Response: Don't send score if hidden
     res.json({
         success: true,
         score: showScore ? score : null,

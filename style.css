@@ -9,9 +9,9 @@
     --accent-hover: #f67b7c;
     --text: #f1f2eb;
     --text-dim: #b8b8b8;
-    
     --quiz-bg: #2f2e2e;
     --quiz-border: #444;
+    --quiz-highlight: #d97706;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -27,6 +27,20 @@ html, body {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background-color: var(--accent); border-radius: 4px; }
+
+/* --- LOADING VIEW --- */
+#loading-view {
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    color: var(--accent);
+    font-size: 1.5rem;
+    font-weight: bold;
+}
 
 /* --- TYPOGRAPHY --- */
 h1 { font-size: 2.5rem; margin-bottom: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: -1px; }
@@ -98,7 +112,7 @@ button:active { transform: translateY(1px); outline: none; }
     cursor: pointer;
     border-radius: 4px;
     transition: all 0.2s;
-    user-select: none; /* Prevent highlighting answers */
+    user-select: none;
 }
 .quiz-options label:hover { border-color: var(--accent); background: #2a2a2a; }
 
@@ -164,15 +178,7 @@ button:active { transform: translateY(1px); outline: none; }
 .quiz-timer { text-align: right; font-size: 1.5rem; color: var(--accent); font-weight: bold; margin-bottom: 15px; }
 .quiz-question-card { background: var(--quiz-bg); border: 1px solid var(--quiz-border); border-radius: 4px; padding: 20px; margin-bottom: 30px; position: relative; }
 .quiz-question-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent); }
-
-/* Prevent highlighting quiz text */
-.quiz-q-text { 
-    font-size: 1.1rem; 
-    font-weight: bold; 
-    margin-bottom: 15px; 
-    user-select: none; 
-}
-
+.quiz-q-text { font-size: 1.1rem; font-weight: bold; margin-bottom: 15px; user-select: none; }
 .quiz-exhibit img { max-width: 100%; border: 1px solid #444; margin: 10px 0; border-radius: 4px; user-select: none; pointer-events: none; }
 
 .quiz-start-screen { text-align: center; padding: 40px 20px; }

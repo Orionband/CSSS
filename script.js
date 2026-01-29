@@ -4,14 +4,13 @@ let availableChallenges = [];
 let currentChallengeId = null;
 let currentChallengeType = null;
 let quizTimerInterval = null;
-let quizDataCache = null;
+let quizMetadataCache = null; // Stores info, not questions
 
-// --- GLOBAL EVENT LISTENERS (Anti-Cheat) ---
+// Security: Block clipboard
 const quizView = document.getElementById('view-quiz');
 ['copy', 'paste', 'cut', 'contextmenu'].forEach(evt => {
     quizView.addEventListener(evt, e => {
         e.preventDefault();
-        // Optional: alert("Action disabled.");
         return false;
     });
 });
@@ -50,15 +49,27 @@ async function logout() {
 }
 function initApp(uid) {
     currentUser = uid;
+    document.getElementById('loading-view').classList.add('hidden');
     document.getElementById('auth-view').classList.add('hidden');
     document.getElementById('app-view').classList.remove('hidden');
     document.getElementById('uid-display').innerText = uid;
     socket.emit('authenticate', uid);
     fetchConfig();
 }
-fetch('/api/me').then(r => r.json()).then(data => {
-    if(data.unique_id) initApp(data.unique_id);
-});
+
+fetch('/api/me')
+    .then(r => r.json())
+    .then(data => {
+        if(data.unique_id) initApp(data.unique_id);
+        else {
+            document.getElementById('loading-view').classList.add('hidden');
+            document.getElementById('auth-view').classList.remove('hidden');
+        }
+    })
+    .catch(() => {
+        document.getElementById('loading-view').classList.add('hidden');
+        document.getElementById('auth-view').classList.remove('hidden');
+    });
 
 async function fetchConfig() {
     const res = await fetch('/api/config');
@@ -133,12 +144,13 @@ function switchTab(id) {
     }
 }
 
-// --- QUIZ LOGIC ---
+// --- QUIZ LOGIC (Secure 2-Step) ---
 async function loadQuiz(id) {
     document.getElementById('quiz-result').classList.add('hidden');
     const area = document.getElementById('quiz-questions-area');
-    area.innerHTML = "<div style='text-align:center; padding:20px'>Loading Quiz...</div>";
+    area.innerHTML = "<div style='text-align:center; padding:20px'>Loading Info...</div>";
     
+    // Step 1: Get Metadata (No questions)
     const res = await fetch(`/api/quiz/${id}`);
     const data = await res.json();
     
@@ -149,20 +161,20 @@ async function loadQuiz(id) {
         return;
     }
 
-    quizDataCache = data; 
+    quizMetadataCache = data; 
     document.getElementById('quiz-title').innerText = data.title;
     document.getElementById('btn-submit-quiz').style.display = 'none';
     document.getElementById('quiz-timer').innerText = '';
 
     let timeText = data.time_limit > 0 ? `${data.time_limit} Minutes` : "Unlimited";
-    let attemptsText = data.max_attempts > 0 ? `${data.max_attempts}` : "Unlimited";
+    let attemptsText = data.max_attempts > 0 ? `${data.attempts_taken} / ${data.max_attempts}` : `${data.attempts_taken} (Unlimited)`;
     
     area.innerHTML = `
         <div class="quiz-start-screen">
             <div class="quiz-info-box">
                 <div class="quiz-info-item"><span>Time Limit:</span> ${timeText}</div>
-                <div class="quiz-info-item"><span>Attempts Allowed:</span> ${attemptsText}</div>
-                <div class="quiz-info-item"><span>Questions:</span> ${data.questions.length}</div>
+                <div class="quiz-info-item"><span>Attempts:</span> ${attemptsText}</div>
+                <div class="quiz-info-item"><span>Questions:</span> ${data.question_count}</div>
             </div>
             <br>
             <button onclick="startQuizSession()" style="width:auto; font-size:1.2rem; padding:15px 40px;">START QUIZ</button>
@@ -170,12 +182,23 @@ async function loadQuiz(id) {
     `;
 }
 
-function startQuizSession() {
-    if(!quizDataCache) return;
-    const data = quizDataCache;
-    const area = document.getElementById('quiz-questions-area');
-    area.innerHTML = '';
+// Step 2: Start (Fetch Questions)
+async function startQuizSession() {
+    if(!currentChallengeId) return;
     
+    const area = document.getElementById('quiz-questions-area');
+    area.innerHTML = "Fetching questions...";
+
+    const res = await fetch(`/api/quiz/${currentChallengeId}/start`, { method: 'POST' });
+    const data = await res.json();
+
+    if(data.error) {
+        alert(data.error);
+        loadQuiz(currentChallengeId); // Refresh info
+        return;
+    }
+
+    area.innerHTML = '';
     document.getElementById('btn-submit-quiz').style.display = 'block';
 
     data.questions.forEach((q, idx) => {
@@ -280,8 +303,8 @@ function startQuizSession() {
         area.appendChild(card);
     });
 
-    if (data.time_limit > 0) {
-        let seconds = data.time_limit * 60;
+    if (quizMetadataCache.time_limit > 0) {
+        let seconds = quizMetadataCache.time_limit * 60;
         const timerDiv = document.getElementById('quiz-timer');
         const updateTimer = () => {
             const m = Math.floor(seconds / 60);
