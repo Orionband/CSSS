@@ -10,13 +10,17 @@
 </head>
 <body>
 
-    <!-- AUTH VIEW -->
-    <div id="auth-view" class="center-wrapper">
+    <!-- LOADING OVERLAY -->
+    <div id="loading-view">CSSS LOADING...</div>
+
+    <!-- AUTH VIEW (Hidden by default) -->
+    <div id="auth-view" class="center-wrapper hidden">
         <div class="auth-box">
             <div style="text-align: center; margin-bottom: 30px;">
                 <h1>CSSS <span>ENGINE</span></h1>
                 <p style="color: var(--text-dim)">Cisco Server-sided Scoring System</p>
             </div>
+            
             <div class="componentContainer">
                 <div id="login-form">
                     <h2>Login</h2>
@@ -27,6 +31,7 @@
                         Don't have an account? <a onclick="toggleAuth('register')">Register</a>
                     </div>
                 </div>
+
                 <div id="register-form" class="hidden">
                     <h2>Register</h2>
                     <input type="text" id="r-user" placeholder="Username">
@@ -37,32 +42,27 @@
                         Already have an account? <a onclick="toggleAuth('login')">Login</a>
                     </div>
                 </div>
+
                 <div id="auth-error" class="error-msg"></div>
             </div>
         </div>
     </div>
 
-    <!-- APP VIEW (Sidebar Layout) -->
+    <!-- APP VIEW (Hidden by default) -->
     <div id="app-view" class="hidden">
-        
-        <!-- SIDEBAR -->
         <nav class="sidebar">
             <div class="sidebar-header">
                 <div class="nav-brand">CSSS <span>ENGINE</span></div>
             </div>
-            <div class="nav-links" id="nav-links-container">
-                <!-- Links injected here -->
-            </div>
+            <div class="nav-links" id="nav-links-container"></div>
             <div class="sidebar-footer">
                 <div id="uid-display"></div>
                 <div class="logout-btn" onclick="logout()">[ LOGOUT ]</div>
             </div>
         </nav>
 
-        <!-- CONTENT -->
         <main class="main-content">
             
-            <!-- LAB GRADER -->
             <div id="view-grader" class="hidden">
                 <div class="componentContainer">
                     <h2 id="lab-title">Challenge</h2>
@@ -85,7 +85,6 @@
                 </div>
             </div>
 
-            <!-- QUIZ TAKER -->
             <div id="view-quiz" class="hidden">
                 <div class="componentContainer">
                     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px;">
@@ -95,6 +94,7 @@
                     <div id="quiz-questions-area"></div>
                     <button onclick="submitQuiz()" id="btn-submit-quiz">Submit Answers >></button>
                 </div>
+                
                 <div id="quiz-result" class="componentContainer hidden">
                     <h2 style="color:var(--accent)">Quiz Results</h2>
                     <div id="quiz-score-display" style="font-size:1.5rem; font-weight:bold; margin-bottom:20px"></div>
@@ -102,7 +102,6 @@
                 </div>
             </div>
 
-            <!-- LEADERBOARD -->
             <div id="view-leaderboard" class="hidden">
                 <div class="componentContainer">
                     <h2>Leaderboard</h2>
@@ -113,7 +112,6 @@
                 </div>
             </div>
 
-            <!-- HISTORY -->
             <div id="view-history" class="hidden">
                 <div class="componentContainer">
                     <h2>Submission History</h2>

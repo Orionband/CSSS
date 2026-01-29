@@ -1,266 +1,146 @@
-# CSSS Documentation
+﻿# CSSS Documentation
 
 ## Why?
-*   There are numerous ways to cheat if you have the answer network and checks in the packet tracer file.
-*   To have both a quiz and a packet tracer on the same site.
-*   Leaderboards because comparison is fun.
+*   **Anti-Cheat**: Keeps answers on the server, not in the file.
+*   **Unified**: Labs and Quizzes in one place.
+*   **Competition**: Live leaderboards.
+
 ## Running the Server
-
-To start the grading environment, follow these steps using your terminal or PowerShell.
-
-1.  **Install Dependencies**
-    Ensure you are in the root directory of the project (where `package.json` is located) and run:
-    ```bash
-    npm install
-    ```
-
-2.  **Start the Application**
-    Run the following command to start the server:
-    ```bash
-    npm start
-    ```
-
-3.  **Access the Interface**
-    Open your web browser and navigate to:
-    `http://localhost:3000`
-
-## Global Configuration
-
-The behavior of the grading engine is controlled by the `lab.conf` file. The `[options]` block controls server-wide settings for both labs and quizzes.
-
-```toml
-[options]
-# Limits submissions per user (0 = infinite)
-max_submissions = 0
-
-# Rate limiting (submissions per window)
-rate_limit_count = 5
-rate_limit_window_seconds = 60
-
-# File Retention
-# Saves files to 'captures/' as [LabTitle]_[UniqueId]_[Timestamp].pka
-retain_pka = true
-retain_xml = false
-
-# Leaderboard Control
-# If true, a Leaderboard tab is shown aggregating scores across all labs and quizzes.
-show_leaderboard = true
-```
+1.  `npm install`
+2.  `npm start`
+3.  Access at `http://localhost:3000`
 
 ---
 
 ## 1. Packet Tracer Labs (`lab.conf`)
 
-You can define multiple Packet Tracer challenges in `lab.conf`. Each lab defined in a `[[labs]]` block will appear as a separate tab in the user interface.
+Defined in `[[labs]]` blocks.
 
-### Lab Properties
-*   **id**: A unique string identifier for the lab (e.g., "lab1").
-*   **title**: The display name shown on the tab and reports.
-*   **show_score**: Show the numeric score (e.g., 80/100).
-*   **show_check_messages**: Show the specific pass/fail feedback items.
+### Lab Check Types (The 4 Core Logic Types)
 
-### Example Lab Structure
-
-```toml
-[[labs]]
-id = "routing_basics"
-title = "Lab 1: Routing"
-show_score = true
-show_check_messages = true
-
-    # Checks for this specific lab go here
-    [[labs.checks]]
-    message = "Hostname Configured"
-    points = 10
-    device = "R1"
-        [[labs.checks.pass]]
-        type = "ConfigMatch"
-        source = "running"
-        context = "global"
-        value = "hostname R1"
-```
-
-### Checks and Logic
-
-Checks are defined within a specific lab using `[[labs.checks]]`.
-
-**Penalties:**
-Assign a check a negative point value.
-*   **Pass**: Points are subtracted (e.g., -10 added to score).
-*   **Fail**: 0 points added.
-
-**Conditions & Precedence:**
-You can chain conditions to create complex logic.
-1.  **Fail Conditions**: If *any* match, the check fails immediately.
-2.  **PassOverride**: If *any* match, the check passes immediately (OR logic).
-3.  **Pass**: *All* must match for the check to pass (AND logic).
-
-**Example Check:**
+#### 1. ConfigMatch (Exact String)
+Use this for static commands that never change.
 ```toml
 [[labs.checks]]
-message = "OSPF Configured"
-points = 10
+message = "Hostname Configured"
+points = 5
 device = "R1"
-
-    # FAIL if shutdown
-    [[labs.checks.fail]]
-    type = "ConfigMatch"
-    source = "running"
-    context = "interface g0/0"
-    value = "shutdown"
-
-    # PASS if modern syntax used
-    [[labs.checks.passoverride]]
-    type = "ConfigMatch"
-    source = "running"
-    context = "interface g0/0"
-    value = "ip ospf 1 area 0"
-
-    # OR PASS if legacy syntax used
     [[labs.checks.pass]]
     type = "ConfigMatch"
     source = "running"
-    context = "router ospf 1"
-    value = "network 192.168.1.0 0.0.0.255 area 0"
+    context = "global"
+    value = "hostname R1"
 ```
 
-### Check Types
+#### 2. ConfigRegex (Pattern Match)
+Use this for variable data like **Encrypted Passwords**, **Usernames**, or **Descriptions** where dates/times might change.
 
-*   **ConfigMatch**: Exact string match in configuration.
-    *   *Note*: If the value starts with `^`, it is treated as a Regex.
-*   **ConfigContains**: Checks if line contains the specified substring.
-*   **ConfigRegex**: Matches line against a Regular Expression.
-    *   *Note*: Double escape backslashes in TOML (e.g., `\\d`).
-*   **XmlMatch**: Checks hardware/physical attributes in the .pka XML (e.g., cabling, power).
+**Example: Encrypted Enable Secret**
+*   Packet Tracer generates a random salt (e.g., `$1$mERr$`). You cannot match this with a simple string. You must use Regex.
+*   **Note**: Double escape backslashes in TOML (`\\`).
+
+```toml
+[[labs.checks]]
+message = "Enable Secret Password Configured"
+points = 10
+device = "R1"
+    [[labs.checks.pass]]
+    type = "ConfigRegex"
+    source = "running"
+    context = "global"
+    # Logic: Matches "enable secret 5" followed by any MD5 hash string
+    value = "^enable secret 5 \\$1\\$.*"
+```
+
+#### 3. XmlMatch (XML Structure Exact)
+Use this to check specific values anywhere within the `.pka` XML structure (e.g., Device Model, X/Y Coordinates, Simulation Time, or Internal States).
+
+**Example A: Checking Text Content**
+Checks the value *between* tags: `<TYPE>Router</TYPE>`
+```toml
+[[labs.checks]]
+message = "Correct Device Type"
+points = 5
+device = "HQ-Router"
+    [[labs.checks.pass]]
+    type = "XmlMatch"
+    path = ["TYPE"]
+    value = "Router"
+```
+
+**Example B: Checking Attributes (Critical)**
+Checks values *inside* the tag definition: `<TYPE model="2960-24TT">`
+*   You must use `"$"` to access attributes.
+*   `"0"` is required to select the first item in the list of tags.
+
+```toml
+[[labs.checks]]
+message = "Correct Switch Model (2960-24TT)"
+points = 5
+device = "Branch-Switch"
+    [[labs.checks.pass]]
+    type = "XmlMatch"
+    # Path: <TYPE> -> 1st Item -> Attributes ($) -> model
+    path = ["TYPE", "0", "$", "model"]
+    value = "2960-24TT"
+```
+
+#### 4. XmlRegex (XML Structure Pattern)
+Use this when an XML value might be stored in different formats (e.g., Hex vs. Decimal) or to check for a specific state regardless of surrounding text.
+
+**Example: Password Recovery (Config Register)**
+*   **Scenario**: A student must set the config register to `0x2142`.
+*   **Problem**: Packet Tracer sometimes saves this as Hex (`0x2142`) and sometimes as Decimal (`8514`).
+*   **Solution**: Use Regex to accept *either* correct value.
+
+```toml
+[[labs.checks]]
+message = "Password Recovery: Config Register set to 0x2142"
+points = 5
+device = "HQ-Router"
+    [[labs.checks.pass]]
+    type = "XmlRegex"
+    # Path: <DEVICE><ENGINE><NEXT_CONFIG_REGISTER>
+    path = ["NEXT_CONFIG_REGISTER"]
+    # Logic: Matches "0x2142" OR "8514"
+    value = "^(0x2142|8514)$"
+```
 
 ### Contexts
-*   `global`: Top level (hostname, banner, etc).
-*   `interface [name]`: Specific interface block.
-*   `router [proto]`: Routing protocol block.
-*   `line [type]`: Line VTY/Console block.
+Where the grader looks for the config:
+*   `global`: Top level (hostname, ip route).
+*   `interface [name]`: Inside an interface block (e.g., `interface GigabitEthernet0/0/0`).
+*   `router [proto]`: Inside a routing block (e.g., `router ospf 1`).
+*   `line [type]`: Inside a line block (e.g., `line vty 0 4`).
 
-> **Important:** When distributing the packet tracer file to students, **ensure the answer network is deleted** inside the PKA activity wizard, or the engine may grade against the answer network instead of the student's work.
-
-> **GUI Builder:** You can also use [CSSS Config Builder](https://csss-config-builder.onrender.com/) to visualize and generate `lab.conf`.
+> **Important:** When distributing the packet tracer file to students, **ensure the answer network is deleted** inside the PKA activity wizard.
 
 ---
 
 ## 2. Quizzes (`quiz.conf`)
 
-Quizzes are text-based assessments defined in `quiz.conf`. They support server-side grading, time limits, and attempt limits.
+Defined in `[[quizzes]]` blocks.
 
-### Quiz Properties
-*   **id**: Unique string identifier.
-*   **title**: Display name on the tab.
-*   **enabled**: `true` or `false` to show/hide the quiz.
-*   **time_limit_minutes**: Integer. Set to `0` for no limit.
-*   **max_attempts**: Integer. Max number of times a user can submit. Set to `0` for infinite.
-*   **show_score**: Show the numeric result.
-*   **show_corrections**: Show detailed feedback (correct/incorrect per question) after submission.
+### Quiz Question Types
 
-### Example Quiz Structure
-
-```toml
-[[quizzes]]
-id = "net_fund"
-title = "Quiz 1: Fundamentals"
-enabled = true
-time_limit_minutes = 15
-max_attempts = 3
-show_score = true
-show_corrections = true
-
-    # Question 1: Multiple Choice
+*   **radio**: Single choice.
+*   **checkbox**: Multiple correct answers.
+*   **text**: Regex-validated text input.
+    ```toml
     [[quizzes.questions]]
-    text = "Which layer is IP?"
-    type = "radio"
-        [[quizzes.questions.answers]]
-        text = "Layer 2"
-        correct = false
-        [[quizzes.questions.answers]]
-        text = "Layer 3"
-        correct = true
+    text = "Enter the command to save memory:"
+    type = "text"
+    # Matches "wr" OR "write memory" OR "copy run start"
+    regex = "^(wr|write memory|copy run.* start.*)$"
+    ```
+*   **matching**: Drag and drop terms.
 
-    # Question 2: Matching
-    [[quizzes.questions]]
-    text = "Match the port to the protocol."
-    type = "matching"
-    explanation = "HTTP is 80, HTTPS is 443."
-        [[quizzes.questions.pairs]]
-        left = "HTTP"
-        right = "80"
-        [[quizzes.questions.pairs]]
-        left = "HTTPS"
-        right = "443"
-```
-
-### Question Types
-
-#### 1. Radio (Single Choice)
-The user selects one answer.
-```toml
-type = "radio"
-    [[quizzes.questions.answers]]
-    text = "Option A"
-    correct = true
-```
-
-#### 2. Checkbox (Multiple Select)
-The user must select **all** correct answers and **none** of the incorrect ones.
-```toml
-type = "checkbox"
-    [[quizzes.questions.answers]]
-    text = "Correct Option 1"
-    correct = true
-    [[quizzes.questions.answers]]
-    text = "Distractor"
-    correct = false
-```
-
-#### 3. Text (Regex Match)
-The user types an answer. Graded via Regular Expression.
-```toml
-type = "text"
-text = "Enter the command to save:"
-regex = "^copy running-config startup-config$|^wr$"
-explanation = "You can use 'wr' or the full command."
-```
-
-#### 4. Matching (Drag and Drop)
-The user drags items from the right (pool) to the terms on the left.
-```toml
-type = "matching"
-text = "Match the protocols."
-    [[quizzes.questions.pairs]]
-    left = "SSH"   # The static term
-    right = "22"   # The draggable answer
-```
-
-### Exhibits (Images)
-You can attach an image to any question type.
-1.  Place the image file in the `public/images/` folder.
-2.  Reference it in the config:
-```toml
-image = "topology.png"
-```
-
----
-
-## Security & Anti-Cheat
-
-*   **Server-Side Grading**: For both Labs and Quizzes, the answer logic is never sent to the client browser. It remains on the server.
-*   **Quiz Restrictions**: Copy, Paste, Cut, and Context Menus (Right-Click) are disabled within the Quiz interface to prevent leaking questions.
-*   **Attempt Limits**: Strictly enforced by the server database.
-
-## Leaderboard System
-
-The leaderboard calculates the **Total Score** for each user.
-1.  It takes the **Maximum Score** achieved by the user for *each* individual lab or quiz.
-2.  It sums these maximums together.
-3.  The leaderboard table displays the breakdown of scores per challenge and the total.
-
-To disable the leaderboard globally, set `show_leaderboard = false` in `lab.conf`.
+## Server-Sided Security
+*   **No Answers on Client**: All grading logic (`grading.js`) runs in a hidden worker thread on the server.
+*   **Input Blocking**: Quizzes disable Copy/Paste.
+*   **Attempts**: Hard limits on how many times a user can submit.
+*   **Sanitized Payloads**: If score display is disabled, the server scrubs the score data from the network packet before sending it to the client.
 
 ## Free Servers
-*   [Koyeb](https://www.koyeb.com/) and [Render](https://render.com/) work for this application.
-*   Note: Free tiers often spin down after inactivity. You can avoid this by using [cron-job.org](https://console.cron-job.org/login) to ping your server URL every 10 minutes.
+*   [Koyeb](https://www.koyeb.com/) and [Render](https://render.com/).
+*   Use [cron-job.org](https://console.cron-job.org/login) to ping the server every 10 minutes to prevent sleeping.
