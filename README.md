@@ -16,10 +16,14 @@
 
 Defined in `[[labs]]` blocks.
 
-### Lab Check Types (The 4 Core Logic Types)
+### Lab Check Types
 
-#### 1. ConfigMatch (Exact String)
-Use this for static commands that never change.
+You can append **`Not`** to any check type to invert the logic (Pass if the condition is **FALSE**).
+
+#### 1. ConfigMatch / ConfigMatchNot
+Checks if a specific line exists (or does not exist) exactly as written.
+
+**Example: Ensure HTTP Server is Disabled**
 ```toml
 [[labs.checks]]
 message = "Hostname Configured"
@@ -32,47 +36,26 @@ device = "R1"
     value = "hostname R1"
 ```
 
-#### 2. ConfigRegex (Pattern Match)
-Use this for variable data like **Encrypted Passwords**, **Usernames**, or **Descriptions** where dates/times might change.
+#### 2. ConfigRegex / ConfigRegexNot
+Checks if a line matches (or does not match) a Regex pattern.
 
-**Example: Encrypted Enable Secret**
-*   Packet Tracer generates a random salt (e.g., `$1$mERr$`). You cannot match this with a simple string. You must use Regex.
-*   **Note**: Double escape backslashes in TOML (`\\`).
-
+**Example: Remove unauthorized user Adam**
 ```toml
 [[labs.checks]]
-message = "Enable Secret Password Configured"
-points = 10
+message = "No Test Users Allowed"
+points = 5
 device = "R1"
     [[labs.checks.pass]]
-    type = "ConfigRegex"
+    type = "ConfigMatchNot"
     source = "running"
     context = "global"
-    # Logic: Matches "enable secret 5" followed by any MD5 hash string
-    value = "^enable secret 5 \\$1\\$.*"
+    value = "username Adam"
 ```
 
-#### 3. XmlMatch (XML Structure Exact)
-Use this to check specific values anywhere within the `.pka` XML structure (e.g., Device Model, X/Y Coordinates, Simulation Time, or Internal States).
+#### 3. XmlMatch / XmlMatchNot
+Checks specific hardware/XML properties.
 
-**Example A: Checking Text Content**
-Checks the value *between* tags: `<TYPE>Router</TYPE>`
-```toml
-[[labs.checks]]
-message = "Correct Device Type"
-points = 5
-device = "HQ-Router"
-    [[labs.checks.pass]]
-    type = "XmlMatch"
-    path = ["TYPE"]
-    value = "Router"
-```
-
-**Example B: Checking Attributes (Critical)**
-Checks values *inside* the tag definition: `<TYPE model="2960-24TT">`
-*   You must use `"$"` to access attributes.
-*   `"0"` is required to select the first item in the list of tags.
-
+**Example: Check Switch Model**
 ```toml
 [[labs.checks]]
 message = "Correct Switch Model (2960-24TT)"
@@ -85,26 +68,8 @@ device = "Branch-Switch"
     value = "2960-24TT"
 ```
 
-#### 4. XmlRegex (XML Structure Pattern)
-Use this when an XML value might be stored in different formats (e.g., Hex vs. Decimal) or to check for a specific state regardless of surrounding text.
-
-**Example: Password Recovery (Config Register)**
-*   **Scenario**: A student must set the config register to `0x2142`.
-*   **Problem**: Packet Tracer sometimes saves this as Hex (`0x2142`) and sometimes as Decimal (`8514`).
-*   **Solution**: Use Regex to accept *either* correct value.
-
-```toml
-[[labs.checks]]
-message = "Password Recovery: Config Register set to 0x2142"
-points = 5
-device = "HQ-Router"
-    [[labs.checks.pass]]
-    type = "XmlRegex"
-    # Path: <DEVICE><ENGINE><NEXT_CONFIG_REGISTER>
-    path = ["NEXT_CONFIG_REGISTER"]
-    # Logic: Matches "0x2142" OR "8514"
-    value = "^(0x2142|8514)$"
-```
+#### 4. XmlRegex / XmlRegexNot
+Checks if an XML value matches a pattern.
 
 ### Contexts
 Where the grader looks for the config:
@@ -134,6 +99,21 @@ Defined in `[[quizzes]]` blocks.
     regex = "^(wr|write memory|copy run.* start.*)$"
     ```
 *   **matching**: Drag and drop terms.
+
+### Quiz Images (Exhibits)
+You can attach an image to **any** question type.
+1.  Place the image file in the `public/images/` folder.
+2.  Reference it in the config using the `image` key.
+
+```toml
+[[quizzes.questions]]
+text = "Identify the network topology shown."
+type = "radio"
+image = "topology.png" # Automatically loads from public/images/topology.png
+    [[quizzes.questions.answers]]
+    text = "Star"
+    correct = true
+```
 
 ## Server-Sided Security
 *   **No Answers on Client**: All grading logic (`grading.js`) runs in a hidden worker thread on the server.
