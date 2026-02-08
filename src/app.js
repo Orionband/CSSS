@@ -25,7 +25,7 @@ app.use(session({
     cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-app.use(express.static(path.join(__dirname, '../')));
+
 app.use(express.static(path.join(__dirname, '../public')));
 
 app.use('/api', authRoutes);

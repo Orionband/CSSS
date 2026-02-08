@@ -3,29 +3,38 @@
 function evaluateCondition(device, condition) {
     if (!device) return false;
 
-    // --- XML CHECKS ---
-    // 1. XmlMatch: Strict Equality (Good for specific models, bools)
-    if (condition.type === 'XmlMatch') {
-        const actual = getXmlValue(device.xmlRoot, condition.path);
-        return actual == condition.value;
+    // Detect Negation
+    let type = condition.type;
+    let isNegated = false;
+
+    if (type.endsWith('Not')) {
+        isNegated = true;
+        type = type.slice(0, -3); // Remove "Not" suffix
     }
 
-    // 2. XmlRegex: Pattern Match (Good for Serial Nums, Mac Addr, Version strings)
-    if (condition.type === 'XmlRegex') {
+    let result = false;
+
+    // --- XML CHECKS ---
+    if (type === 'XmlMatch') {
         const actual = getXmlValue(device.xmlRoot, condition.path);
-        if (actual === undefined || actual === null) return false;
-        try {
-            const re = new RegExp(condition.value);
-            return re.test(String(actual));
-        } catch (e) { return false; }
+        // Loose equality
+        result = (actual == condition.value);
+    }
+    else if (type === 'XmlRegex') {
+        const actual = getXmlValue(device.xmlRoot, condition.path);
+        if (actual !== undefined && actual !== null) {
+            try {
+                const re = new RegExp(condition.value);
+                result = re.test(String(actual));
+            } catch (e) { result = false; }
+        }
     }
 
     // --- CONFIG CHECKS ---
-    if (['ConfigMatch', 'ConfigRegex'].includes(condition.type)) {
+    else if (['ConfigMatch', 'ConfigRegex'].includes(type)) {
         const sourceCfg = condition.source === 'startup' ? device.startup : device.running;
         let targetLines = [];
         
-        // Context Switching
         if (!condition.context || condition.context === 'global') {
             targetLines = sourceCfg.global;
         } else {
@@ -34,22 +43,22 @@ function evaluateCondition(device, condition) {
             if (blockKey) targetLines = sourceCfg.blocks[blockKey];
         }
 
-        if (!targetLines) return false;
-
-        // 3. ConfigRegex: Pattern Match (Good for dynamic IPs, Encrypted Passwords)
-        if (condition.type === 'ConfigRegex') {
-            try {
-                const regex = new RegExp(condition.value);
-                return targetLines.some(l => regex.test(l));
-            } catch (e) { return false; }
-        }
-
-        // 4. ConfigMatch: Strict String Match (Good for specific commands)
-        if (condition.type === 'ConfigMatch') {
-            return targetLines.includes(condition.value);
+        // If lines exist, check them
+        if (targetLines) {
+            if (type === 'ConfigRegex') {
+                try {
+                    const regex = new RegExp(condition.value);
+                    result = targetLines.some(l => regex.test(l));
+                } catch (e) { result = false; }
+            }
+            else if (type === 'ConfigMatch') {
+                result = targetLines.includes(condition.value);
+            }
         }
     }
-    return false;
+
+    // Return result (inverted if Negated)
+    return isNegated ? !result : result;
 }
 
 module.exports = { evaluateCondition };
