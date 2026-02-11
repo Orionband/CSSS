@@ -13,7 +13,16 @@ function generateUniqueId() { //output something like cypat uid
     return id.match(/.{1,4}/g).join('-');
 }
 
-router.post('/register', async (req, res) => {
+const registerLimiter = rateLimit({
+    windowMs: 24*60 * 60 * 1000, 
+    max: 2, 
+    message: { error: 'Too many accounts created.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+
+router.post('/register', registerLimiter, async (req, res) => {
     const { username, email, password } = req.body;
     if (!username || !email || !password) return res.status(400).json({ error: "Missing fields" });
     try {
@@ -29,26 +38,35 @@ router.post('/register', async (req, res) => {
     }
 });
 const loginLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000, //5 minutes
-    max: 5, // limit each IP to 5 login requests per window
+    windowMs: 5 * 60 * 1000, 
+    max: 5, 
     message: { error: 'Too many login attempts. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
 });
+router.post('/logout', (req, res) => {
+    req.session.destroy(err => {
+        res.clearCookie('connect.sid'); // clear cookie regardless of error
+        res.json({ success: true });
+    });
+});
+
 router.post('/login', loginLimiter, async (req, res) => {
     const { username, password } = req.body;
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+
     if (!user || !(await bcrypt.compare(password, user.password))) {
         return res.status(401).json({ error: "Invalid credentials" });
     }
-    req.session.userId = user.id;
-    req.session.uniqueId = user.unique_id;
-    res.json({ success: true, unique_id: user.unique_id });
-});
 
-router.post('/logout', (req, res) => {
-    req.session.destroy();
-    res.json({ success: true });
+    req.session.regenerate(err => {
+        if (err) return res.status(500).json({ error: "Session regeneration failed" });
+
+        req.session.userId = user.id;
+        req.session.uniqueId = user.unique_id;
+
+        res.json({ success: true, unique_id: user.unique_id });
+    });
 });
 
 router.get('/me', (req, res) => {

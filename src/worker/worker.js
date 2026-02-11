@@ -44,28 +44,41 @@ const { evaluateCondition } = require('./grading');
             const hTag = cmac(key, 1, Buffer.alloc(0));
             const cTag = cmac(key, 2, ciphertext);
             if (!xor(xor(nTag, hTag), cTag).equals(tag)) throw new Error("File Integrity Failed");
-
+            report("Decrypting", 45);
             let decrypted = decryptCTR(key, nTag, ciphertext);
 
-            report("Finalizing", 70);
+            report("Finalizing", 60);
             const s3 = Buffer.allocUnsafe(decrypted.length);
             const dLen = decrypted.length;
             for (let i = 0; i < dLen; i++) s3[i] = (decrypted[i] ^ (dLen - i)) & 0xFF;
 
-            report("Decompressing", 80);
-            try { finalXML = zlib.inflateSync(s3.subarray(4)).toString(); } 
-            catch { finalXML = zlib.inflateRawSync(s3.subarray(4)).toString(); }
+            report("Decompressing", 65);
+            
+            // FIX: Prevent Zip Bombs by limiting output size
+            const MAX_XML_OUTPUT = 1024 * 1024 * 1000; // Limit decompressed XML to 100MB
+            const zlibOptions = { maxOutputLength: MAX_XML_OUTPUT };
+
+            try { 
+                finalXML = zlib.inflateSync(s3.subarray(4), zlibOptions).toString(); 
+            } 
+            catch (e) { 
+                // Try raw inflate if standard fails, but keep the limit
+                try {
+                    finalXML = zlib.inflateRawSync(s3.subarray(4), zlibOptions).toString();
+                } catch (zlibErr) {
+                    throw new Error("Decompression failed or file too large");
+                }
+            }
         }
 
-        report("Grading...", 90);
+        report("Grading...", 70);
         const fullConfig = toml.parse(configData);
         
         const labConfig = (fullConfig.labs || []).find(l => l.id === labId);
         if (!labConfig) throw new Error("Lab configuration not found");
-
+		finalXML = finalXML.replace(/<!DOCTYPE[^>]*>/gi, ""); //sanitize
         const parser = new xml2js.Parser();
         const xmlObj = await parser.parseStringPromise(finalXML);
-        
         const devMap = {};
         const devList = xmlObj?.PACKETTRACER5_ACTIVITY?.PACKETTRACER5?.[0]?.NETWORK?.[0]?.DEVICES?.[0]?.DEVICE || [];
         
@@ -78,7 +91,6 @@ const { evaluateCondition } = require('./grading');
                 startup: parseCiscoConfig(d.ENGINE?.[0]?.STARTUPCONFIG?.[0]?.LINE || [])
             };
         });
-
         let currentScore = 0;
         let maxScore = 0;
         const serverResults = [];
