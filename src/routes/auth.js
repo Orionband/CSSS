@@ -3,15 +3,14 @@ const bcrypt = require('bcryptjs');
 const db = require('../database');
 const { getConfig } = require('../config');
 const router = express.Router();
+const { customAlphabet } = require('nanoid');
+const rateLimit = require('express-rate-limit');
 
-function generateUniqueId() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 12; i++) {
-        if (i > 0 && i % 4 === 0) result += '-';
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+function generateUniqueId() { //output something like cypat uid
+	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+	const nanoid = customAlphabet(alphabet, 12);
+    const id = nanoid();
+    return id.match(/.{1,4}/g).join('-');
 }
 
 router.post('/register', async (req, res) => {
@@ -29,8 +28,14 @@ router.post('/register', async (req, res) => {
         res.status(400).json({ error: "Username or Email already exists" });
     }
 });
-
-router.post('/login', async (req, res) => {
+const loginLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, //5 minutes
+    max: 5, // limit each IP to 5 login requests per window
+    message: { error: 'Too many login attempts. Please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+router.post('/login', loginLimiter, async (req, res) => {
     const { username, password } = req.body;
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
     if (!user || !(await bcrypt.compare(password, user.password))) {
