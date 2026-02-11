@@ -14,17 +14,25 @@ const quizRoutes = require('./routes/quiz');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 1e8 });
+const io = new Server(server, { maxHttpBufferSize: 50 * 1024 * 1024 }); //using 50 because of the module 1-13 size... how did you even get it that high...
+
+const dotenv = require('dotenv');
+dotenv.config();
 
 app.use(express.json());
+
 app.use(session({
     store: new SqliteStore({ client: db, expired: { clear: true, intervalMs: 900000 } }),
-    secret: 'csss-secure-key',
+    secret: process.env.SESSION_SECRET, // read secret from .env
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 24 * 60 * 60 * 1000 }
+    cookie: {
+        httpOnly: true,  
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',        
+        maxAge: 24 * 60 * 60 * 1000
+    }
 }));
-
 
 app.use(express.static(path.join(__dirname, '../public')));
 

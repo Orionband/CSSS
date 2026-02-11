@@ -23,7 +23,7 @@ You can append **`Not`** to any check type to invert the logic (Pass if the cond
 #### 1. ConfigMatch / ConfigMatchNot
 Checks if a specific line exists (or does not exist) exactly as written.
 
-**Example: Ensure HTTP Server is Disabled**
+**Example: Simple hostname check**
 ```toml
 [[labs.checks]]
 message = "Hostname Configured"
