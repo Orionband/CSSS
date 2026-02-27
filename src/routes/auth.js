@@ -6,21 +6,15 @@ const router = express.Router();
 const { customAlphabet } = require('nanoid');
 const rateLimit = require('express-rate-limit');
 
-function generateUniqueId() { //output something like cypat uid
+function generateUniqueId() { 
 	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 	const nanoid = customAlphabet(alphabet, 12);
     const id = nanoid();
     return id.match(/.{1,4}/g).join('-');
 }
 
-const registerLimiter = rateLimit({
-    windowMs: 24*60 * 60 * 1000, 
-    max: 2, 
-    message: { error: 'Too many accounts created.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
+const registerLimiter = rateLimit({ windowMs: 24*60*60*1000, max: 2, standardHeaders: true, legacyHeaders: false });
+const loginLimiter = rateLimit({ windowMs: 5*60*1000, max: 5, standardHeaders: true, legacyHeaders: false });
 
 router.post('/register', registerLimiter, async (req, res) => {
     const { username, email, password } = req.body;
@@ -37,16 +31,10 @@ router.post('/register', registerLimiter, async (req, res) => {
         res.status(400).json({ error: "Username or Email already exists" });
     }
 });
-const loginLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000, 
-    max: 5, 
-    message: { error: 'Too many login attempts. Please try again later.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
+
 router.post('/logout', (req, res) => {
     req.session.destroy(err => {
-        res.clearCookie('connect.sid'); // clear cookie regardless of error
+        res.clearCookie('connect.sid'); 
         res.json({ success: true });
     });
 });
@@ -61,10 +49,8 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     req.session.regenerate(err => {
         if (err) return res.status(500).json({ error: "Session regeneration failed" });
-
         req.session.userId = user.id;
         req.session.uniqueId = user.unique_id;
-
         res.json({ success: true, unique_id: user.unique_id });
     });
 });
@@ -74,7 +60,6 @@ router.get('/me', (req, res) => {
     res.json({ id: req.session.userId, unique_id: req.session.uniqueId });
 });
 
-// Merged Config (Labs + Quizzes)
 router.get('/config', (req, res) => {
     const cfg = getConfig();
     const safeLabs = (cfg.labs || []).map(l => ({ id: l.id, title: l.title, type: 'lab' }));
@@ -85,17 +70,19 @@ router.get('/config', (req, res) => {
 
     res.json({ 
         challenges: [...safeLabs, ...safeQuizzes],
-        options: { show_leaderboard: cfg.options?.show_leaderboard !== false }
+        options: { 
+            show_leaderboard: process.env.SHOW_LEADERBOARD === 'true',
+            show_history: process.env.SHOW_HISTORY === 'true' // NEW FLAG
+        }
     });
 });
 
 router.get('/leaderboard', (req, res) => {
-    const cfg = getConfig();
-    if (cfg.options?.show_leaderboard === false) {
+    if (process.env.SHOW_LEADERBOARD !== 'true') {
         return res.status(403).json({ error: "Leaderboard disabled" });
     }
     
-    // Combine IDs
+    const cfg = getConfig();
     const labs = cfg.labs || [];
     const quizzes = (cfg.quizzes || []).filter(q => q.enabled !== false);
     const allChallenges = [...labs, ...quizzes];
@@ -106,13 +93,29 @@ router.get('/leaderboard', (req, res) => {
     users.forEach(u => {
         let total = 0;
         const scores = {};
+        
         allChallenges.forEach(ch => {
-            const row = db.prepare('SELECT MAX(score) as s FROM submissions WHERE user_id = ? AND lab_id = ?').get(u.id, ch.id);
+            let hideScore = false;
+            if (ch.type === 'quiz') {
+                const qCfg = quizzes.find(q => q.id === ch.id);
+                if (qCfg && qCfg.show_score === false) hideScore = true;
+            } else {
+                const lCfg = labs.find(l => l.id === ch.id);
+                if (lCfg && lCfg.show_score === false) hideScore = true;
+            }
+
+            const row = db.prepare("SELECT MAX(score) as s FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'completed'").get(u.id, ch.id);
             const score = row && row.s !== null ? row.s : 0;
-            scores[ch.id] = score;
-            total += score;
+            
+            if (hideScore) {
+                scores[ch.id] = '?'; 
+            } else {
+                scores[ch.id] = score;
+                total += score;
+            }
         });
-        if (total > 0) {
+        
+        if (total > 0 || Object.values(scores).some(s => s === '?')) {
             leaderboard.push({ username: u.username, scores: scores, total_score: total });
         }
     });
@@ -124,9 +127,12 @@ router.get('/leaderboard', (req, res) => {
 
 router.get('/history', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Not logged in" });
+
+
+    if (process.env.SHOW_HISTORY !== 'true') return res.status(403).json({ error: "History disabled" });
     
     const cfg = getConfig();
-    const submissions = db.prepare('SELECT id, lab_id, score, max_score, timestamp, details, type FROM submissions WHERE user_id = ? ORDER BY id DESC').all(req.session.userId);
+    const submissions = db.prepare("SELECT id, lab_id, score, max_score, timestamp, details, type FROM submissions WHERE user_id = ? AND status = 'completed' ORDER BY id DESC").all(req.session.userId);
     
     const safeSubmissions = submissions.map(sub => {
         let showScore = true;
@@ -146,11 +152,10 @@ router.get('/history', (req, res) => {
         let details = [];
         try { details = JSON.parse(sub.details); } catch(e) {}
         
-        // Security filter for labs, passed through for quiz if enabled
         let clientDetails = null;
         if (showDetails) {
             if (type === 'quiz') {
-                clientDetails = details; // Quiz details already formatted in route
+                clientDetails = details; 
             } else {
                 clientDetails = details.filter(item => {
                     const isPenalty = item.possible < 0;

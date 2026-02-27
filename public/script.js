@@ -1,12 +1,11 @@
-﻿const socket = io();
+﻿const socket = io({ autoConnect: false }); 
 let currentUser = null;
 let availableChallenges = [];
 let currentChallengeId = null;
 let currentChallengeType = null;
 let quizTimerInterval = null;
-let quizMetadataCache = null; // Stores info, not questions
+let quizMetadataCache = null; 
 
-// Security: Block clipboard
 const quizView = document.getElementById('view-quiz');
 ['copy', 'paste', 'cut', 'contextmenu'].forEach(evt => {
     quizView.addEventListener(evt, e => {
@@ -20,6 +19,7 @@ function toggleAuth(mode) {
     document.getElementById('register-form').classList.toggle('hidden', mode !== 'register');
     document.getElementById('auth-error').innerText = '';
 }
+
 async function login() {
     const user = document.getElementById('l-user').value;
     const pass = document.getElementById('l-pass').value;
@@ -31,6 +31,7 @@ async function login() {
     if(data.success) initApp(data.unique_id);
     else document.getElementById('auth-error').innerText = data.error;
 }
+
 async function register() {
     const user = document.getElementById('r-user').value;
     const email = document.getElementById('r-email').value;
@@ -43,17 +44,26 @@ async function register() {
     if(data.success) initApp(data.unique_id);
     else document.getElementById('auth-error').innerText = data.error;
 }
+
 async function logout() {
     await fetch('/api/logout', { method: 'POST' });
     location.reload();
 }
+
 function initApp(uid) {
     currentUser = uid;
     document.getElementById('loading-view').classList.add('hidden');
     document.getElementById('auth-view').classList.add('hidden');
     document.getElementById('app-view').classList.remove('hidden');
     document.getElementById('uid-display').innerText = uid;
-    socket.emit('authenticate', uid);
+    
+    socket.disconnect(); 
+    socket.connect();
+    
+    socket.once('connect', () => {
+        socket.emit('authenticate', uid);
+    });
+
     fetchConfig();
 }
 
@@ -91,6 +101,7 @@ function renderNav(options) {
         item.onclick = () => switchTab(ch.id);
         nav.appendChild(item);
     });
+    
     if (options.show_leaderboard) {
         const lb = document.createElement('div');
         lb.className = 'nav-item';
@@ -99,12 +110,16 @@ function renderNav(options) {
         lb.onclick = () => switchTab('leaderboard');
         nav.appendChild(lb);
     }
-    const hist = document.createElement('div');
-    hist.className = 'nav-item';
-    hist.id = 'nav-history';
-    hist.innerText = 'History';
-    hist.onclick = () => switchTab('history');
-    nav.appendChild(hist);
+    
+    // CONDITIONALLY RENDER HISTORY TAB
+    if (options.show_history) {
+        const hist = document.createElement('div');
+        hist.className = 'nav-item';
+        hist.id = 'nav-history';
+        hist.innerText = 'History';
+        hist.onclick = () => switchTab('history');
+        nav.appendChild(hist);
+    }
 }
 
 function switchTab(id) {
@@ -144,13 +159,11 @@ function switchTab(id) {
     }
 }
 
-// --- QUIZ LOGIC (Secure 2-Step) ---
 async function loadQuiz(id) {
     document.getElementById('quiz-result').classList.add('hidden');
     const area = document.getElementById('quiz-questions-area');
     area.innerHTML = "<div style='text-align:center; padding:20px'>Loading Info...</div>";
     
-    // Step 1: Get Metadata (No questions)
     const res = await fetch(`/api/quiz/${id}`);
     const data = await res.json();
     
@@ -182,7 +195,6 @@ async function loadQuiz(id) {
     `;
 }
 
-// Step 2: Start (Fetch Questions)
 async function startQuizSession() {
     if(!currentChallengeId) return;
     
@@ -194,7 +206,7 @@ async function startQuizSession() {
 
     if(data.error) {
         alert(data.error);
-        loadQuiz(currentChallengeId); // Refresh info
+        loadQuiz(currentChallengeId); 
         return;
     }
 
@@ -209,9 +221,26 @@ async function startQuizSession() {
         
         if (q.image) {
             const img = document.createElement('img');
-            img.src = `images/${q.image}`;
+            img.src = `/api/quiz/asset/image/${q.image}`;
             img.style.maxWidth = "100%";
             card.appendChild(img);
+        }
+
+        if (q.pka) {
+            const pkaLink = document.createElement('a');
+            pkaLink.href = `/api/quiz/asset/pka/${q.pka}`;
+            pkaLink.download = q.pka;
+            pkaLink.innerHTML = `💾 Download Packet Tracer Exhibit (.pka)`;
+            pkaLink.style.display = 'inline-block';
+            pkaLink.style.marginTop = '10px';
+            pkaLink.style.marginBottom = '10px';
+            pkaLink.style.padding = '8px 12px';
+            pkaLink.style.background = '#0d6efd';
+            pkaLink.style.color = '#fff';
+            pkaLink.style.textDecoration = 'none';
+            pkaLink.style.borderRadius = '5px';
+            pkaLink.style.fontWeight = 'bold';
+            card.appendChild(pkaLink);
         }
 
         const optsDiv = document.createElement('div');
@@ -303,8 +332,9 @@ async function startQuizSession() {
         area.appendChild(card);
     });
 
-    if (quizMetadataCache.time_limit > 0) {
-        let seconds = quizMetadataCache.time_limit * 60;
+    // SERVER-SYNCHRONIZED SECURE TIMER
+    if (quizMetadataCache.time_limit > 0 && data.time_remaining_seconds !== undefined) {
+        let seconds = data.time_remaining_seconds;
         const timerDiv = document.getElementById('quiz-timer');
         const updateTimer = () => {
             const m = Math.floor(seconds / 60);
@@ -370,6 +400,25 @@ async function submitQuiz() {
         return;
     }
 
+    // Disable inputs after submission
+    const allInputs = area.querySelectorAll('input');
+    allInputs.forEach(inp => inp.disabled = true);
+
+    const draggables = area.querySelectorAll('.draggable-item');
+    draggables.forEach(d => {
+        d.removeAttribute('draggable');
+        d.ondragstart = null;
+        d.style.cursor = 'not-allowed';
+        d.style.opacity = '0.7';
+    });
+
+    const dropZones = area.querySelectorAll('.drop-zone');
+    dropZones.forEach(dz => {
+        dz.ondrop = null;
+        dz.ondragover = null;
+        dz.ondragleave = null;
+    });
+
     document.getElementById('btn-submit-quiz').style.display = 'none';
     const resDiv = document.getElementById('quiz-result');
     resDiv.classList.remove('hidden');
@@ -396,7 +445,6 @@ async function submitQuiz() {
     window.scrollTo(0,0);
 }
 
-// ... Shared Logic ...
 async function loadLeaderboard() {
     const res = await fetch('/api/leaderboard');
     const data = await res.json();
@@ -423,9 +471,16 @@ async function loadLeaderboard() {
         tbody.appendChild(tr);
     });
 }
+
 async function loadHistory() {
     const res = await fetch('/api/history');
     const data = await res.json();
+    
+    if (data.error) {
+        alert(data.error);
+        return;
+    }
+
     const list = document.getElementById('history-list');
     if(!data.history || data.history.length === 0) {
         list.innerHTML = "<div style='text-align:center; padding:20px; color:#888'>No submissions yet.</div>";
@@ -445,6 +500,7 @@ async function loadHistory() {
         list.appendChild(item);
     });
 }
+
 function showHistoryDetail(sub) {
     document.getElementById('history-list').parentElement.classList.add('hidden');
     document.getElementById('history-detail').classList.remove('hidden');
@@ -470,13 +526,16 @@ function showHistoryDetail(sub) {
         });
     }
 }
+
 function closeHistory() {
     document.getElementById('history-detail').classList.add('hidden');
     document.getElementById('history-list').parentElement.classList.remove('hidden');
 }
+
 const fileInput = document.getElementById('f');
 const progressBar = document.getElementById('progress-bar');
 const statusText = document.getElementById('status');
+
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if(!file) return;
@@ -493,11 +552,13 @@ fileInput.addEventListener('change', (e) => {
     };
     reader.readAsArrayBuffer(file);
 });
+
 socket.on('progress', (d) => {
     let pct = parseFloat(d.percent) || 0;
     progressBar.style.width = pct + '%';
     statusText.innerText = `${d.stage} (${Math.round(pct)}%)`;
 });
+
 socket.on('result', (data) => {
     progressBar.style.width = '100%';
     statusText.innerText = "Done";
@@ -518,6 +579,7 @@ socket.on('result', (data) => {
         });
     }
 });
+
 socket.on('err', (msg) => {
     statusText.innerText = "Error: " + msg;
     progressBar.style.background = '#f44747';

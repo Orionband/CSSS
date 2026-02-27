@@ -8,7 +8,7 @@ const { evaluateCondition } = require('./grading');
 
 (async () => {
     try {
-        const { fileData, configData, labId } = workerData;
+        const { fileData, configData, labId, maxXmlMb } = workerData;
         const inputBuffer = Buffer.from(fileData);
         const totalBytes = inputBuffer.length;
         const safeTotal = totalBytes > 0 ? totalBytes : 1;
@@ -54,19 +54,19 @@ const { evaluateCondition } = require('./grading');
 
             report("Decompressing", 65);
             
-            // FIX: Prevent Zip Bombs by limiting output size
-            const MAX_XML_OUTPUT = 1024 * 1024 * 1000; // Limit decompressed XML to 100MB
+            // Dynamic XML limitation based on individual lab configuration
+            const limitMb = maxXmlMb || 1125; 
+            const MAX_XML_OUTPUT = 1024 * 1024 * limitMb; 
             const zlibOptions = { maxOutputLength: MAX_XML_OUTPUT };
 
             try { 
                 finalXML = zlib.inflateSync(s3.subarray(4), zlibOptions).toString(); 
             } 
             catch (e) { 
-                // Try raw inflate if standard fails, but keep the limit
                 try {
                     finalXML = zlib.inflateRawSync(s3.subarray(4), zlibOptions).toString();
                 } catch (zlibErr) {
-                    throw new Error("Decompression failed or file too large");
+                    throw new Error("Decompression failed or file too large. Exceeds Lab Max XML Size.");
                 }
             }
         }
@@ -143,7 +143,6 @@ const { evaluateCondition } = require('./grading');
             grading: {
                 total: currentScore,
                 max: maxScore,
-                // FIX: Send NULL if hidden, otherwise send the array (even if empty)
                 clientBreakdown: showMsgs ? clientResults : null,
                 serverBreakdown: serverResults,
                 show_score: showScore

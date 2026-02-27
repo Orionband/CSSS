@@ -23,22 +23,22 @@ db.prepare(`
         details TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         type TEXT DEFAULT 'lab',
+        status TEXT DEFAULT 'completed',
         FOREIGN KEY(user_id) REFERENCES users(id)
     )
 `).run();
 
-// Migration: Add columns if they don't exist
-try {
-    db.prepare('SELECT lab_id FROM submissions LIMIT 1').get();
-} catch (e) {
-    db.prepare('ALTER TABLE submissions ADD COLUMN lab_id TEXT').run();
-}
+// Migrations
+try { db.prepare('SELECT lab_id FROM submissions LIMIT 1').get(); } 
+catch (e) { db.prepare('ALTER TABLE submissions ADD COLUMN lab_id TEXT').run(); }
 
-try {
-    db.prepare('SELECT type FROM submissions LIMIT 1').get();
-} catch (e) {
-    console.log("Migrating DB: Adding 'type' column...");
-    db.prepare("ALTER TABLE submissions ADD COLUMN type TEXT DEFAULT 'lab'").run();
+try { db.prepare('SELECT type FROM submissions LIMIT 1').get(); } 
+catch (e) { db.prepare("ALTER TABLE submissions ADD COLUMN type TEXT DEFAULT 'lab'").run(); }
+
+try { db.prepare('SELECT status FROM submissions LIMIT 1').get(); } 
+catch (e) { 
+    console.log("Migrating DB: Adding 'status' column...");
+    db.prepare("ALTER TABLE submissions ADD COLUMN status TEXT DEFAULT 'completed'").run(); 
 }
 
 module.exports = db;
