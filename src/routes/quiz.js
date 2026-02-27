@@ -1,4 +1,6 @@
 ﻿const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const db = require('../database');
 const { getConfig } = require('../config');
 const router = express.Router();
@@ -13,7 +15,85 @@ function shuffle(array) {
     return array;
 }
 
-// 1. Get Quiz Metadata ONLY (No Questions)
+function parseDbTime(dbTimestamp) {
+    return new Date(dbTimestamp.replace(' ', 'T') + 'Z').getTime();
+}
+
+// ============================================================================
+// SERVER-SIDE SWEEPER
+// ============================================================================
+setInterval(() => {
+    try {
+        const inProgress = db.prepare("SELECT * FROM submissions WHERE status = 'in_progress' AND type = 'quiz'").all();
+        const cfg = getConfig();
+        const quizzes = cfg.quizzes || [];
+
+        inProgress.forEach(sub => {
+            const qCfg = quizzes.find(q => q.id === sub.lab_id);
+            if (qCfg && qCfg.time_limit_minutes > 0) {
+                const startTime = parseDbTime(sub.timestamp);
+                const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                
+                if (elapsedSeconds > (qCfg.time_limit_minutes * 60) + 30) {
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
+                      .run(JSON.stringify([{message: "Auto-closed: Time limit expired.", correct: false}]), sub.id);
+                }
+            }
+        });
+    } catch (e) {
+        console.error("Error in quiz sweeper:", e.message);
+    }
+}, 60 * 1000);
+
+// SECURE ASSET ROUTE
+router.get('/asset/:type/:filename', (req, res) => {
+    if (!req.session.userId) return res.status(401).send("Unauthorized");
+    
+    const type = req.params.type;
+    if (type !== 'image' && type !== 'pka') return res.status(400).send("Invalid asset type");
+
+    const safeFilename = path.basename(req.params.filename);
+    const cfg = getConfig();
+    
+    let isFileAllowed = false;
+    const quizzes = cfg.quizzes || [];
+    
+    for (const q of quizzes) {
+        if (q.enabled === false) continue;
+
+        let containsAsset = false;
+        for (const question of (q.questions || [])) {
+            if (type === 'image' && question.image === safeFilename) containsAsset = true;
+            if (type === 'pka' && question.pka === safeFilename) containsAsset = true;
+        }
+
+        if (containsAsset) {
+            const activeSession = db.prepare("SELECT id FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress'").get(req.session.userId, q.id);
+            if (activeSession) {
+                isFileAllowed = true;
+                break;
+            } else if (q.max_attempts > 0) {
+                const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, q.id).c;
+                if (attempts < q.max_attempts) {
+                    isFileAllowed = true;
+                    break; 
+                }
+            } else {
+                isFileAllowed = true;
+                break;
+            }
+        }
+    }
+
+    if (!isFileAllowed) return res.status(403).send("Forbidden: You have completed this quiz or it is disabled.");
+
+    const assetPath = path.join(__dirname, '../../protected', type === 'image' ? 'images' : 'pka', safeFilename);
+    if (!fs.existsSync(assetPath)) return res.status(404).send("File missing from disk.");
+
+    if (type === 'pka') res.download(assetPath, safeFilename);
+    else res.sendFile(assetPath);
+});
+
 router.get('/:id', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -22,7 +102,6 @@ router.get('/:id', (req, res) => {
 
     if (!quiz || quiz.enabled === false) return res.status(404).json({ error: "Quiz not found or disabled" });
 
-    // Check attempts for display
     let attemptsTaken = 0;
     try {
         attemptsTaken = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
@@ -38,7 +117,6 @@ router.get('/:id', (req, res) => {
     });
 });
 
-// 2. Start Quiz (Returns Questions)
 router.post('/:id/start', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -46,17 +124,38 @@ router.post('/:id/start', (req, res) => {
     const quiz = (cfg.quizzes || []).find(q => q.id === req.params.id);
     if (!quiz || quiz.enabled === false) return res.status(404).json({ error: "Quiz not found" });
 
-    // Enforce Limits
-    if (quiz.max_attempts > 0) {
-        const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
-        if (attempts >= quiz.max_attempts) {
-            return res.status(403).json({ error: "Maximum attempts reached." });
+    const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
+
+    let timeRemaining = quiz.time_limit_minutes * 60;
+
+    if (existingInProgress) {
+        if (quiz.time_limit_minutes > 0) {
+            const startTime = parseDbTime(existingInProgress.timestamp);
+            const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+            timeRemaining = Math.max(0, timeRemaining - elapsedSeconds);
+
+            if (timeRemaining <= 0) {
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
+                  .run(JSON.stringify([{message: "Time expired", correct: false}]), existingInProgress.id);
+                return res.status(403).json({ error: "Time limit expired for this attempt. It has been marked as 0." });
+            }
         }
+    } else {
+        if (quiz.max_attempts > 0) {
+            const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
+            if (attempts >= quiz.max_attempts) return res.status(403).json({ error: "Maximum attempts reached." });
+        }
+        
+        db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'quiz')")
+          .run(req.session.userId, req.session.uniqueId, quiz.id);
     }
 
-    // Sanitize Questions (Strip answers/regex/explanations)
     const safeQuestions = quiz.questions.map((q, idx) => {
-        const base = { id: idx, text: q.text, type: q.type, image: q.image };
+        // Points safely passed to frontend if needed
+        const base = { 
+            id: idx, text: q.text, type: q.type, 
+            image: q.image, pka: q.pka, points: q.points !== undefined ? parseInt(q.points) : 1 
+        };
         
         if (q.type === 'radio' || q.type === 'checkbox') {
             base.answers = q.answers.map((a, aIdx) => ({ id: aIdx, text: a.text }));
@@ -68,10 +167,9 @@ router.post('/:id/start', (req, res) => {
         return base;
     });
 
-    res.json({ questions: safeQuestions });
+    res.json({ questions: safeQuestions, time_remaining_seconds: timeRemaining });
 });
 
-// 3. Submit Quiz
 router.post('/:id/submit', (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -79,76 +177,104 @@ router.post('/:id/submit', (req, res) => {
     const quiz = (cfg.quizzes || []).find(q => q.id === req.params.id);
     if (!quiz || quiz.enabled === false) return res.status(404).json({ error: "Quiz not found" });
 
-    // Enforce limits on submission too (prevent race conditions)
-    if (quiz.max_attempts > 0) {
-        const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
-        if (attempts >= quiz.max_attempts) {
-            return res.status(403).json({ error: "Submission rejected: Limit reached." });
-        }
+    const lockKey = `quiz_${req.session.userId}_${quiz.id}`;
+    if (global.submissionLocks.has(lockKey)) {
+        return res.status(429).json({ error: "A submission is currently processing. Please wait." });
     }
+    global.submissionLocks.add(lockKey);
 
-    const userAnswers = req.body.answers || {}; 
-    let score = 0;
-    const maxScore = quiz.questions.length;
-    const breakdown = [];
+    try {
+        const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
 
-    quiz.questions.forEach((q, idx) => {
-        const input = userAnswers[idx];
-        let isCorrect = false;
-
-        if (q.type === 'radio') {
-            const ansId = parseInt(input);
-            if (!isNaN(ansId) && q.answers[ansId] && q.answers[ansId].correct) isCorrect = true;
-        } 
-        else if (q.type === 'checkbox') {
-            if (Array.isArray(input)) {
-                const selected = input.map(i => parseInt(i)).sort().toString();
-                const correctIndices = q.answers.map((a, i) => a.correct ? i : -1).filter(i => i !== -1).sort().toString();
-                if (selected === correctIndices) isCorrect = true;
-            }
-        } 
-        else if (q.type === 'text') {
-            if (input && typeof input === 'string') {
-                const re = new RegExp(q.regex, 'i');
-                if (re.test(input.trim())) isCorrect = true;
-            }
+        if (!existingInProgress) {
+            return res.status(403).json({ error: "No active quiz session found. You may have run out of time or already submitted." });
         }
-        else if (q.type === 'matching') {
-            if (input && typeof input === 'object') {
-                const totalPairs = q.pairs.length;
-                let matches = 0;
-                Object.keys(input).forEach(leftId => {
-                    if (parseInt(leftId) === parseInt(input[leftId])) matches++;
-                });
-                if (matches === totalPairs) isCorrect = true;
+
+        if (quiz.time_limit_minutes > 0) {
+            const startTime = parseDbTime(existingInProgress.timestamp);
+            const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+            
+            if (elapsedSeconds > (quiz.time_limit_minutes * 60) + 10) {
+                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
+                      .run(JSON.stringify([{message: "Submission rejected: Time limit forcefully expired.", correct: false}]), existingInProgress.id);
+                 return res.status(403).json({ error: "Time limit expired! The server rejected your submission and marked it as 0." });
             }
         }
 
-        if (isCorrect) score++;
+        const userAnswers = req.body.answers || {}; 
+        let score = 0;
+        let maxScore = 0; // UPDATED to track dynamic points
+        const breakdown = [];
 
-        breakdown.push({
-            questionIdx: idx,
-            message: `Question ${idx + 1}`,
-            possible: 1,
-            awarded: isCorrect ? 1 : 0,
-            correct: isCorrect,
-            explanation: q.explanation || (isCorrect ? "Correct" : "Incorrect")
+        quiz.questions.forEach((q, idx) => {
+            const input = userAnswers[idx];
+            let isCorrect = false;
+
+            if (q.type === 'radio') {
+                if (typeof input !== 'undefined' && input !== null) {
+                    const ansId = parseInt(input);
+                    if (!isNaN(ansId) && q.answers[ansId] && q.answers[ansId].correct) isCorrect = true;
+                }
+            } 
+            else if (q.type === 'checkbox') {
+                if (Array.isArray(input)) {
+                    const selected = input.map(i => parseInt(i)).filter(i => !isNaN(i)).sort().toString();
+                    const correctIndices = q.answers.map((a, i) => a.correct ? i : -1).filter(i => i !== -1).sort().toString();
+                    if (selected === correctIndices) isCorrect = true;
+                }
+            } 
+            else if (q.type === 'text') {
+                if (typeof input === 'string' && input.trim() !== '') {
+                    try {
+                        const re = new RegExp(q.regex, 'i');
+                        if (re.test(input.trim())) isCorrect = true;
+                    } catch (e) {} 
+                }
+            }
+            else if (q.type === 'matching') {
+                if (input && typeof input === 'object' && !Array.isArray(input)) {
+                    const totalPairs = q.pairs.length;
+                    let matches = 0;
+                    Object.keys(input).forEach(leftId => {
+                        if (parseInt(leftId) === parseInt(input[leftId])) matches++;
+                    });
+                    if (matches === totalPairs) isCorrect = true;
+                }
+            }
+
+            // POINT CALCULATION
+            const pts = (q.points !== undefined && !isNaN(parseInt(q.points))) ? parseInt(q.points) : 1;
+            maxScore += pts;
+            
+            if (isCorrect) {
+                score += pts;
+            }
+
+            breakdown.push({
+                questionIdx: idx,
+                message: `Question ${idx + 1}`,
+                possible: pts,
+                awarded: isCorrect ? pts : 0,
+                correct: isCorrect,
+                explanation: q.explanation || (isCorrect ? "Correct" : "Incorrect")
+            });
         });
-    });
 
-    db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(req.session.userId, req.session.uniqueId, quiz.id, score, maxScore, JSON.stringify(breakdown), 'quiz');
+        db.prepare("UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ?")
+          .run(score, maxScore, JSON.stringify(breakdown), existingInProgress.id);
 
-    const showScore = quiz.show_score !== false;
-    const showCorrections = quiz.show_corrections !== false;
+        const showScore = quiz.show_score !== false;
+        const showCorrections = quiz.show_corrections !== false;
 
-    // Secure Response: Don't send score if hidden
-    res.json({
-        success: true,
-        score: showScore ? score : null,
-        max_score: showScore ? maxScore : null,
-        breakdown: showCorrections ? breakdown : null
-    });
+        res.json({
+            success: true,
+            score: showScore ? score : null,
+            max_score: showScore ? maxScore : null,
+            breakdown: showCorrections ? breakdown : null
+        });
+    } finally {
+        global.submissionLocks.delete(lockKey);
+    }
 });
 
 module.exports = router;

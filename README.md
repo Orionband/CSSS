@@ -7,14 +7,28 @@
 
 ## Running the Server
 1.  `npm install`
-2.  `npm start`
-3.  Access at `http://localhost:3000`
+2.  `node quickstart.js` (Interactive Setup)
+3.  `npm start`
+4.  Access at `http://localhost:3000`
 
 ---
 
 ## 1. Packet Tracer Labs (`lab.conf`)
 
 Defined in `[[labs]]` blocks.
+
+### Lab Settings
+You can customize resource usage and attempt limits per lab:
+```toml
+[[labs]]
+id = "lab1_basic"
+title = "Basic Lab"
+max_submissions = 3
+max_upload_mb = 10
+max_xml_output_mb = 150
+rate_limit_count = 5
+rate_limit_window_seconds = 60
+```
 
 ### Lab Check Types
 
@@ -39,19 +53,6 @@ device = "R1"
 #### 2. ConfigRegex / ConfigRegexNot
 Checks if a line matches (or does not match) a Regex pattern.
 
-**Example: Remove unauthorized user Adam**
-```toml
-[[labs.checks]]
-message = "No Test Users Allowed"
-points = 5
-device = "R1"
-    [[labs.checks.pass]]
-    type = "ConfigMatchNot"
-    source = "running"
-    context = "global"
-    value = "username Adam"
-```
-
 #### 3. XmlMatch / XmlMatchNot
 Checks specific hardware/XML properties.
 
@@ -68,15 +69,11 @@ device = "Branch-Switch"
     value = "2960-24TT"
 ```
 
-#### 4. XmlRegex / XmlRegexNot
-Checks if an XML value matches a pattern.
-
 ### Contexts
 Where the grader looks for the config:
 *   `global`: Top level (hostname, ip route).
-*   `interface [name]`: Inside an interface block (e.g., `interface GigabitEthernet0/0/0`).
-*   `router [proto]`: Inside a routing block (e.g., `router ospf 1`).
-*   `line [type]`: Inside a line block (e.g., `line vty 0 4`).
+*   `interface [name]`: Inside an interface block.
+*   `router [proto]`: Inside a routing block.
 
 > **Important:** When distributing the packet tracer file to students, **ensure the answer network is deleted** inside the PKA activity wizard.
 
@@ -91,36 +88,29 @@ Defined in `[[quizzes]]` blocks.
 *   **radio**: Single choice.
 *   **checkbox**: Multiple correct answers.
 *   **text**: Regex-validated text input.
-    ```toml
-    [[quizzes.questions]]
-    text = "Enter the command to save memory:"
-    type = "text"
-    # Matches "wr" OR "write memory" OR "copy run start"
-    regex = "^(wr|write memory|copy run.* start.*)$"
-    ```
 *   **matching**: Drag and drop terms.
 
-### Quiz Images (Exhibits)
-You can attach an image to **any** question type.
-1.  Place the image file in the `public/images/` folder.
-2.  Reference it in the config using the `image` key.
+### Quiz Exhibits (Images & PKA Files)
+You can attach an image or a downloadable `.pka` file to **any** question.
+
+To prevent cheating (IDOR/URL guessing), assets must be placed inside the **`protected/`** directory at the root of your server, *not* in the public folder.
+1. Images go in `protected/images/`
+2. Packet Tracer exhibits go in `protected/pka/`
 
 ```toml
 [[quizzes.questions]]
-text = "Identify the network topology shown."
+text = "Based on the provided Packet Tracer file and diagram, what is the IP address of Router A?"
 type = "radio"
-image = "topology.png" # Automatically loads from public/images/topology.png
+image = "topology.png"    # Placed in protected/images/topology.png
+pka = "lab_scenario.pka"  # Placed in protected/pka/lab_scenario.pka
     [[quizzes.questions.answers]]
-    text = "Star"
+    text = "192.168.1.1"
     correct = true
 ```
 
 ## Server-Sided Security
 *   **No Answers on Client**: All grading logic (`grading.js`) runs in a hidden worker thread on the server.
-*   **Input Blocking**: Quizzes disable Copy/Paste.
-*   **Attempts**: Hard limits on how many times a user can submit.
-*   **Sanitized Payloads**: If score display is disabled, the server scrubs the score data from the network packet before sending it to the client.
-
-## Free Servers
-*   [Koyeb](https://www.koyeb.com/) and [Render](https://render.com/).
-*   Use [cron-job.org](https://console.cron-job.org/login) to ping the server every 10 minutes to prevent sleeping.
+*   **Input Blocking**: Quizzes disable Copy/Paste, and lock inputs permanently upon submission to prevent tampering.
+*   **Protected Assets**: Quiz Exhibits (Images/PKA) are hidden behind a secure API. They cannot be downloaded unless the user is logged in, and the file belongs to an actively `enabled` quiz.
+*   **Sanitized Payloads**: If score display is disabled, the server scrubs the score data entirely from the socket stream.
+*   **TOCTOU Mitigations**: Global memory locks prevent race-condition exploits to bypass `max_submissions`.
