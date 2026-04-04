@@ -27,12 +27,26 @@ You can customize resource usage and attempt limits per lab:
 [[labs]]
 id = "lab1_basic"
 title = "Basic Lab"
+show_score = true
+show_check_messages = true
+show_missed_points = true
+comp_start = "2026-04-02T10:00:00Z"
+comp_end = "2026-04-03T12:00:00Z"
 max_submissions = 3
 max_upload_mb = 10
 max_xml_output_mb = 150
 rate_limit_count = 5
 rate_limit_window_seconds = 60
 ```
+
+- ``show_score`` configures showing the score after competion
+- ``show_check_messages`` configures showing the check messages after competion
+- ``show_missed_points`` configures showing the missed points after competion
+- ``comp_start`` and ``comp_end`` configure the competition window. 
+- ``max_submissions`` configures the maximum times you can submit
+- ``max_upload_mb`` controls the maximum size of an uploaded packet tracer
+- ``max_cml_output_mb`` controls the maximum size of a decompressed packet tracer
+- ``rate_limit_count`` controls ratelimiting of the submissions of packet tracers per the value of ``rate_limit_window_seconds``
 
 ### Lab Check Types
 
@@ -109,11 +123,29 @@ device = "R1"
 ```
 
 ### Contexts
-Where the grader looks for the config:
+Where the grader looks for the config, examples:
 - `global`: Top level (hostname, ip route).
 - `interface [name]`: Inside an interface block.
 - `router [proto]`: Inside a routing block.
 
+Example:
+interface GigabitEthernet0/0/0
+ ip address 192.168.10.1 255.255.255.0
+ duplex auto
+ speed auto
+ shutdown
+
+```
+    [[labs.checks]]
+    message = "Check ip address 192.168.1.2 255.255.255..."
+    points = 1
+    device = "Router0"
+        [[labs.checks.pass]]
+        type = "ConfigMatch"
+        source = "running"
+        context = "interface GigabitEthernet0/0/0"
+        value = "ip address 192.168.1.2 255.255.255.252"
+```
 ### When distributing the packet tracer file, **ensure the answer network is deleted/replaced** inside the PKA activity wizard.
 
 ---
@@ -121,6 +153,25 @@ Where the grader looks for the config:
 ## 2. Quizzes (`quiz.conf`)
 
 Defined in `[[quizzes]]` blocks.
+```
+[[quizzes]]
+id = "quiz1"
+title = "Quiz 1"
+show_score = true
+show_corrections = true
+show_missed_points = true
+comp_start = "2026-04-02T10:00:00Z"
+comp_end = "2026-04-03T12:00:00Z"
+time_limit_minutes = 15
+max_attempts = 3
+```
+
+- ``show_score`` configures showing the score after completion
+- ``show_corrections`` configures showing the corrections after completion
+- ``show_missed_points`` configures showing the missed points after completion
+- ``comp_start`` and ``comp_end`` configure the competition window
+- ``time_limit_minutes`` configures the time limit per attempt
+- ``max_attempts`` configures the maximum number of attempts
 
 ### Quiz Question Types
 
@@ -130,9 +181,9 @@ Defined in `[[quizzes]]` blocks.
 *   **matching**: Drag and drop terms.
 
 ### Quiz Exhibits (Images & PKA Files)
-You can attach an image or a downloadable `.pka` file to **any** question.
+You can attach an image or a downloadable `.pka` file to any question.
 
-To prevent cheating (IDOR/URL guessing), assets must be placed inside the **`protected/`** directory at the root of your server, *not* in the public folder.
+Assets must be placed inside the `protected/` directory at the root of your server, not in the public folder.
 1. Images go in `protected/images/`
 2. Packet Tracer exhibits go in `protected/pka/`
 
@@ -148,11 +199,10 @@ pka = "lab_scenario.pka"  # Placed in protected/pka/lab_scenario.pka
 ```
 
 ## Server-Sided Security
-*   **No Answers on Client**: All grading logic (`grading.js`) runs in a hidden worker thread on the server.
-*   **Input Blocking**: Quizzes disable Copy/Paste, and lock inputs permanently upon submission to prevent tampering.
-*   **Protected Assets**: Quiz Exhibits (Images/PKA) are hidden behind a secure API. They cannot be downloaded unless the user is logged in, and the file belongs to an actively `enabled` quiz.
-*   **Sanitized Payloads**: If score display is disabled, the server scrubs the score data entirely from the socket stream.
-*   **TOCTOU Mitigations**: Global memory locks prevent race-condition exploits to bypass `max_submissions`.
+- No answers on client for quizes
+- No answers on client for packet tracer
+- Time limit on server
+
 
 ## Free Servers & Configuration Builder
 *   You can deploy CSSS to [Koyeb](https://www.koyeb.com/) or [Render](https://render.com/).
