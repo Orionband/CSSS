@@ -164,6 +164,8 @@ comp_start = "2026-04-02T10:00:00Z"
 comp_end = "2026-04-03T12:00:00Z"
 time_limit_minutes = 15
 max_attempts = 3
+rate_limit_count = 5
+rate_limit_window_seconds = 60
 ```
 
 - ``show_score`` configures showing the score after completion
@@ -172,7 +174,7 @@ max_attempts = 3
 - ``comp_start`` and ``comp_end`` configure the competition window
 - ``time_limit_minutes`` configures the time limit per attempt
 - ``max_attempts`` configures the maximum number of attempts
-
+- ``rate_limit_count`` controls ratelimiting of the submissions of packet tracers per the value of ``rate_limit_window_seconds``
 ### Quiz Question Types
 
 *   **radio**: Single choice.
