@@ -5,7 +5,7 @@
 - Labs and quizes in the same place
 - There is a leaderboard wow so cool competition
 - You can customize feedback, like score or check messages.
-- (Hopefully) better grading system with csss-config-builder, especially through "Show Differences Only"
+- (Hopefully) better grading system with [CSSS Config Builder](https://github.com/Orionband/csss-config-builder), especially through "Show Differences Only"
 
 ## Running the Server
 1.  `npm install`
@@ -157,4 +157,4 @@ pka = "lab_scenario.pka"  # Placed in protected/pka/lab_scenario.pka
 ## Free Servers & Configuration Builder
 *   You can deploy CSSS to [Koyeb](https://www.koyeb.com/) or [Render](https://render.com/).
 *   Use [cron-job.org](https://console.cron-job.org/login) to ping the server every 10 minutes to prevent sleeping.
-*   User [CSSS Config Builder](https://csss-config-builder.onrender.com/)** to easily generate your `lab.conf` and `quiz.conf` files. 
+*   User [CSSS Config Builder](https://github.com/Orionband/csss-config-builder) to easily generate your `lab.conf` and `quiz.conf` files. 
