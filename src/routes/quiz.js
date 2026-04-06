@@ -79,7 +79,7 @@ router.get('/asset/:type/:filename', (req, res) => {
     if (!req.session.userId) return res.status(401).send("Unauthorized");
     
     const type = req.params.type;
-    if (type !== 'image' && type !== 'pka') return res.status(400).send("Invalid asset type");
+    if (type !== 'image' && type !== 'pka' && type !== 'pkt') return res.status(400).send("Invalid asset type");
 
     const safeFilename = path.basename(req.params.filename);
     

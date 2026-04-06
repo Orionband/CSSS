@@ -7,6 +7,10 @@
 - You can customize feedback, like score or check messages.
 - (Hopefully) better grading system with [CSSS Config Builder](https://github.com/Orionband/csss-config-builder), especially through "Show Differences Only"
 
+## Notes
+- You still need to provide a pka file and write instructions in activity wizard. (working on the latter)
+- Because of the removal of the answer network/not grading in activity wizard, there can't be any dynamic feedback unless the user constantly uploads the packet tracer.
+
 ## Running the Server
 1.  `npm install`
 2.  `node quickstart.js` (setup)
@@ -209,4 +213,3 @@ pka = "lab_scenario.pka"  # Placed in protected/pka/lab_scenario.pka
 ## Free Servers & Configuration Builder
 *   You can deploy CSSS to [Koyeb](https://www.koyeb.com/) or [Render](https://render.com/).
 *   Use [cron-job.org](https://console.cron-job.org/login) to ping the server every 10 minutes to prevent sleeping.
-*   User [CSSS Config Builder](https://github.com/Orionband/csss-config-builder) to easily generate your `lab.conf` and `quiz.conf` files. 

@@ -56,4 +56,9 @@ function isWindowOpen(challenge) {
 
 reloadConfig();
 
-module.exports = { getConfig: () => config, getRawConfig: () => rawConfig };
+// Explicitly define the exported structure to prevent null reference crashes
+module.exports = { 
+    getConfig: () => config, 
+    getRawConfig: () => rawConfig, 
+    isWindowOpen 
+};
