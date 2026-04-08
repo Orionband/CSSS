@@ -122,7 +122,6 @@ router.get('/me', (req, res) => {
 router.get('/config', (req, res) => {
     const cfg = getConfig();
     const safeLabs = (cfg.labs || []).map(l => ({ id: l.id, title: l.title, type: 'lab' }));
-    
     const safeQuizzes = (cfg.quizzes || []).map(q => ({ id: q.id, title: q.title, type: 'quiz' }));
 
     const fullTitle = process.env.APP_TITLE || 'CSSS ENGINE';
