@@ -16,8 +16,6 @@
     "express-rate-limit": "^8.2.1",
     "express-session": "^1.17.3",
     "nanoid": "^5.1.6",
-    "re2": "^1.23.3",
-    "readline-sync": "^1.4.10",
     "socket.io": "^4.7.2",
     "toml": "^3.0.0",
     "twofish": "^1.0.1",
