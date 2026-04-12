@@ -41,7 +41,7 @@ const sessionMiddleware = session({
     cookie: {
         httpOnly: true,  
         secure: 'auto',
-        sameSite: 'strict',
+        sameSite: 'lax',
         maxAge: 24 * 60 * 60 * 1000
     }
 });
@@ -86,6 +86,11 @@ app.use((req, res, next) => {
     }
     
     next();
+});
+
+// Health check endpoint for Koyeb/Render keep-alive
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
 });
 
 app.use(express.static(path.join(__dirname, '../public')));
@@ -139,8 +144,6 @@ function processWorkerQueue() {
                 const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
                  if (process.env.RETAIN_PKA === 'true') {
 					fs.writeFileSync(path.join(capturesDir, `${baseName}.pka`), Buffer.from(workerData.fileData));
-
-					// Also retain PKT when PKA is retained
 					fs.writeFileSync(path.join(capturesDir, `${baseName}.pkt`), Buffer.from(workerData.fileData));
 				}
                 if (process.env.RETAIN_XML === 'true') fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
@@ -367,5 +370,5 @@ setInterval(() => {
     }
 }, 24 * 60 * 60 * 1000);
 
-const PORT = 3000;
+const PORT = 10000;
 server.listen(PORT, () => console.log(`CSSS Server running on http://localhost:${PORT}`));
