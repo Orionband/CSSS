@@ -5,4 +5,5 @@ protected/pka/
 grader.db
 lab.conf
 quiz.conf
+combined.txt
 .env

@@ -98,6 +98,11 @@ function initApp(uid) {
     });
 
     fetchCsrfToken().then(() => fetchConfig());
+
+    // Keep-alive ping to prevent Render/Koyeb from sleeping while app is in use
+    setInterval(() => {
+        fetch('/health').catch(() => {});
+    }, 20000);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -664,7 +669,6 @@ async function loadHistory() {
     });
 }
 
-// Reusable nested rendering logic for Lab Feedback
 function renderLabResults(container, breakdown) {
     container.innerHTML = '';
     if (!breakdown || breakdown.length === 0) {
