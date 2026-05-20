@@ -22,10 +22,10 @@ function toggleAuth(mode) {
     document.getElementById('auth-error').innerText = '';
 }
 
-async function securePost(url, body = {}) {
+async function securePost(url, body = {}, method = 'POST') {
     const headers = { 'Content-Type': 'application/json' };
     if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
-    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    return fetch(url, { method: method, headers, body: JSON.stringify(body) });
 }
 
 async function fetchCsrfToken() {
@@ -51,11 +51,15 @@ function applyBranding(options) {
     document.title = full;
 }
 
+// SAFE ESCAPE TO PREVENT HTML INJECTION & XSS
 function escapeHtml(str) {
     if (str === null || str === undefined) return '';
-    const div = document.createElement('div');
-    div.appendChild(document.createTextNode(String(str)));
-    return div.innerHTML;
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 async function login() {
@@ -114,13 +118,32 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-submit-quiz')?.addEventListener('click', submitQuiz);
     document.getElementById('upload-area-box')?.addEventListener('click', () => document.getElementById('f').click());
     document.getElementById('btn-close-history')?.addEventListener('click', closeHistory);
+    
+    // Bind static modal elements
+    document.getElementById('modal-close-btn')?.addEventListener('click', closeModal);
+    document.getElementById('btn-admin-new-user')?.addEventListener('click', adminPromptCreateUser);
+    
+    document.getElementById('tab-admin-users')?.addEventListener('click', () => {
+        document.getElementById('admin-panel-users').classList.remove('hidden');
+        document.getElementById('admin-panel-lb').classList.add('hidden');
+        document.getElementById('tab-admin-users').classList.add('active');
+        document.getElementById('tab-admin-lb').classList.remove('active');
+    });
+    document.getElementById('tab-admin-lb')?.addEventListener('click', () => {
+        document.getElementById('admin-panel-lb').classList.remove('hidden');
+        document.getElementById('admin-panel-users').classList.add('hidden');
+        document.getElementById('tab-admin-lb').classList.add('active');
+        document.getElementById('tab-admin-users').classList.remove('active');
+    });
 
     fetchCsrfToken().then(() => {
         fetch('/api/me')
             .then(r => r.json())
             .then(data => {
-                if(data.unique_id) initApp(data.unique_id);
-                else {
+                if(data.unique_id) {
+                    if(data.is_admin) window.isAdmin = true;
+                    initApp(data.unique_id);
+                } else {
                     document.getElementById('loading-view').classList.add('hidden');
                     document.getElementById('auth-view').classList.remove('hidden');
                     fetch('/api/config').then(r => r.json()).then(d => {
@@ -158,7 +181,7 @@ function renderNav(options) {
         item.id = 'nav-' + ch.id;
         const label = ch.type === 'quiz' ? '[QUIZ] ' : '[LAB] ';
         item.innerText = label + ch.title;
-        item.onclick = () => switchTab(ch.id);
+        item.addEventListener('click', () => switchTab(ch.id));
         nav.appendChild(item);
     });
     
@@ -167,7 +190,7 @@ function renderNav(options) {
         lb.className = 'nav-item';
         lb.id = 'nav-leaderboard';
         lb.innerText = 'Leaderboard';
-        lb.onclick = () => switchTab('leaderboard');
+        lb.addEventListener('click', () => switchTab('leaderboard'));
         nav.appendChild(lb);
     }
     
@@ -176,8 +199,18 @@ function renderNav(options) {
         hist.className = 'nav-item';
         hist.id = 'nav-history';
         hist.innerText = 'History';
-        hist.onclick = () => switchTab('history');
+        hist.addEventListener('click', () => switchTab('history'));
         nav.appendChild(hist);
+    }
+
+    if (window.isAdmin) {
+        const adm = document.createElement('div');
+        adm.className = 'nav-item';
+        adm.id = 'nav-admin';
+        adm.innerText = '[ ADMIN PANEL ]';
+        adm.style.color = 'var(--accent)';
+        adm.addEventListener('click', () => switchTab('admin'));
+        nav.appendChild(adm);
     }
 }
 
@@ -186,6 +219,7 @@ function switchTab(id) {
     document.getElementById('view-quiz').classList.add('hidden');
     document.getElementById('view-history').classList.add('hidden');
     document.getElementById('view-leaderboard').classList.add('hidden');
+    document.getElementById('view-admin').classList.add('hidden');
     
     if (quizTimerInterval) clearInterval(quizTimerInterval);
     if (labTimerInterval) clearInterval(labTimerInterval);
@@ -200,6 +234,9 @@ function switchTab(id) {
     } else if(id === 'leaderboard') {
         document.getElementById('view-leaderboard').classList.remove('hidden');
         loadLeaderboard();
+    } else if(id === 'admin') {
+        document.getElementById('view-admin').classList.remove('hidden');
+        loadAdminPanel();
     } else {
         currentChallengeId = id;
         const challenge = availableChallenges.find(c => c.id === id);
@@ -255,7 +292,7 @@ async function loadLabInfo(id) {
                 <div class="quiz-info-item"><span>PKA provided:</span> ${escapeHtml(pkaText)}</div>
             </div>
             <br>
-            <button id="btn-start-lab-dyn" data-id="${id}" style="width:auto; font-size:1.2rem; padding:15px 40px;">START LAB</button>
+            <button id="btn-start-lab-dyn" data-id="${escapeHtml(id)}" style="width:auto; font-size:1.2rem; padding:15px 40px;">START LAB</button>
         </div>
     `;
     document.getElementById('btn-start-lab-dyn').addEventListener('click', (e) => startLabSession(e.target.dataset.id));
@@ -632,9 +669,9 @@ async function loadLeaderboard() {
         let html = `<td>#${index + 1}</td><td>${escapeHtml(entry.username)}</td>`;
         data.labs.forEach(l => {
             const score = entry.scores[l.id] || 0;
-            html += `<td style="color:#b8b8b8">${score}</td>`;
+            html += `<td style="color:#b8b8b8">${escapeHtml(String(score))}</td>`;
         });
-        html += `<td style="color:var(--accent); font-weight:bold">${entry.total_score}</td>`;
+        html += `<td style="color:var(--accent); font-weight:bold">${escapeHtml(String(entry.total_score))}</td>`;
         tr.innerHTML = html;
         tbody.appendChild(tr);
     });
@@ -659,11 +696,14 @@ async function loadHistory() {
         const item = document.createElement('div');
         item.className = 'history-row';
         const date = new Date(sub.timestamp).toLocaleString();
+        
         item.addEventListener('click', () => showHistoryDetail(sub));
+        
         const challenge = availableChallenges.find(c => c.id === sub.lab_id);
         const title = challenge ? challenge.title : sub.lab_id;
         const scoreText = (sub.score !== null) ? `${sub.score} / ${sub.max_score}` : "Hidden";
         const typeLabel = sub.type === 'quiz' ? '<span class="hist-type type-quiz">QUIZ</span>' : '<span class="hist-type type-lab">LAB</span>';
+        
         item.innerHTML = `<div><div style="font-weight:bold; color:#fff">${typeLabel} ${escapeHtml(title)}</div><div class="hist-date">${date}</div></div><div class="hist-score">${scoreText}</div>`;
         list.appendChild(item);
     });
@@ -696,10 +736,10 @@ function renderLabResults(container, breakdown) {
         const devContent = document.createElement('div');
         devContent.className = 'result-group-content';
         
-        devHeader.onclick = () => {
+        devHeader.addEventListener('click', () => {
             devHeader.classList.toggle('expanded');
             devContent.classList.toggle('hidden');
-        };
+        });
 
         for (const ctx of Object.keys(grouped[dev]).sort()) {
             const ctxDiv = document.createElement('div');
@@ -712,10 +752,10 @@ function renderLabResults(container, breakdown) {
             const ctxContent = document.createElement('div');
             ctxContent.className = 'result-subgroup-content';
             
-            ctxHeader.onclick = () => {
+            ctxHeader.addEventListener('click', () => {
                 ctxHeader.classList.toggle('expanded');
                 ctxContent.classList.toggle('hidden');
-            };
+            });
 
             grouped[dev][ctx].forEach(c => {
                 const row = document.createElement('div');
@@ -830,3 +870,258 @@ socket.on('err', (msg) => {
     statusText.innerText = "Error: " + msg;
     progressBar.style.background = '#f44747';
 });
+
+// ===================== ADMIN SYSTEM =====================
+
+async function loadAdminPanel() {
+    const usersBody = document.getElementById('admin-users-body');
+    const lbBody = document.getElementById('admin-lb-body');
+    usersBody.innerHTML = '<tr><td colspan="4" style="text-align:center">Loading...</td></tr>';
+    lbBody.innerHTML = '<tr><td colspan="6" style="text-align:center">Loading...</td></tr>';
+    
+    const res = await fetch('/api/admin/users');
+    if (!res.ok) {
+        usersBody.innerHTML = `<tr><td colspan="4" style="color:var(--accent); text-align:center">Error loading users.</td></tr>`;
+        return;
+    }
+    const data = await res.json();
+    
+    // Manage Users Tab
+    usersBody.innerHTML = '';
+    data.users.forEach(u => {
+        const row = document.createElement('tr');
+        
+        let actionsHtml = `
+            <div class="action-btns">
+                <button class="btn-small btn-secondary btn-admin-subs" data-id="${u.id}" data-name="${escapeHtml(u.username)}">View Submissions</button>
+                <button class="btn-small btn-secondary btn-admin-pass" data-id="${u.id}" data-name="${escapeHtml(u.username)}">Reset Password</button>
+                <button class="btn-small btn-danger btn-admin-del" data-id="${u.id}" data-name="${escapeHtml(u.username)}">Delete User</button>
+            </div>
+        `;
+        
+        row.innerHTML = `
+            <td>${u.id}</td>
+            <td>
+                ${escapeHtml(u.username)}
+                ${u.is_admin ? '<span class="badge" style="background:var(--accent); color:#000;">ADMIN</span>' : ''}
+            </td>
+            <td>${u.submission_count}</td>
+            <td>${actionsHtml}</td>
+        `;
+        usersBody.appendChild(row);
+    });
+
+    // Manage Leaderboard Tab
+    lbBody.innerHTML = '';
+    
+    const lbRes = await fetch('/api/leaderboard');
+    const lbData = await lbRes.json();
+
+    const lbMap = {};
+    if (lbData.leaderboard) {
+        lbData.leaderboard.forEach(entry => lbMap[entry.username] = entry);
+    }
+
+    data.users.forEach(u => {
+        const row = document.createElement('tr');
+        
+        let totalScore = 0;
+        if (lbMap[u.username]) {
+            totalScore = lbMap[u.username].total_score;
+        }
+        
+        let actionsHtml = `
+            <button class="btn-small btn-secondary btn-admin-score" data-id="${u.id}" data-name="${escapeHtml(u.username)}" data-adj="${u.score_adjustment || 0}" data-withheld="${u.withheld || 0}">Adjust Score</button>
+        `;
+        
+        row.innerHTML = `
+            <td>${escapeHtml(u.username)}</td>
+            <td>(Calculated on Server)</td>
+            <td style="color:${u.score_adjustment > 0 ? '#4CAF50' : (u.score_adjustment < 0 ? '#f44747' : '#888')}">${u.score_adjustment || 0}</td>
+            <td>${totalScore}</td>
+            <td style="color:${u.withheld ? '#f44747' : '#888'}">${u.withheld ? 'YES' : 'NO'}</td>
+            <td>${actionsHtml}</td>
+        `;
+        lbBody.appendChild(row);
+    });
+
+    // Attach event listeners securely
+    document.querySelectorAll('.btn-admin-subs').forEach(btn => {
+        btn.addEventListener('click', (e) => adminViewSubmissions(e.target.dataset.id, e.target.dataset.name));
+    });
+    document.querySelectorAll('.btn-admin-pass').forEach(btn => {
+        btn.addEventListener('click', (e) => adminPromptPassword(e.target.dataset.id, e.target.dataset.name));
+    });
+    document.querySelectorAll('.btn-admin-del').forEach(btn => {
+        btn.addEventListener('click', (e) => adminDeleteUser(e.target.dataset.id, e.target.dataset.name));
+    });
+    document.querySelectorAll('.btn-admin-score').forEach(btn => {
+        btn.addEventListener('click', (e) => adminPromptScore(e.target.dataset.id, e.target.dataset.name, e.target.dataset.adj, e.target.dataset.withheld));
+    });
+}
+
+function showModal(contentHtml) {
+    document.getElementById('modal-inner').innerHTML = contentHtml;
+    document.getElementById('modal-container').classList.remove('hidden');
+    document.getElementById('modal-container').style.display = 'flex';
+}
+
+function closeModal() {
+    document.getElementById('modal-container').classList.add('hidden');
+    document.getElementById('modal-container').style.display = 'none';
+}
+
+function adminPromptCreateUser() {
+    const html = `
+        <h2 style="color:var(--accent); margin-bottom: 20px;">Create New User</h2>
+        <div style="margin-bottom: 15px;">
+            <input type="text" id="admin-new-user" class="field-input" placeholder="Username">
+        </div>
+        <div style="margin-bottom: 15px;">
+            <input type="email" id="admin-new-email" class="field-input" placeholder="Email (Optional)">
+        </div>
+        <div style="margin-bottom: 20px;">
+            <input type="password" id="admin-new-pass" class="field-input" placeholder="Password">
+            <div class="password-hint">Min 8 characters, 1 uppercase letter, 1 number</div>
+        </div>
+        <div style="margin-bottom: 25px;">
+            <label class="custom-label">
+                <input type="checkbox" id="admin-new-isadmin">
+                <span class="checkmark"></span> Grant Admin Privileges
+            </label>
+        </div>
+        <button id="btn-admin-create-user-exec">Create User</button>
+    `;
+    showModal(html);
+    document.getElementById('btn-admin-create-user-exec').addEventListener('click', adminExecuteCreateUser);
+}
+
+async function adminExecuteCreateUser() {
+    const username = document.getElementById('admin-new-user').value;
+    const email = document.getElementById('admin-new-email').value;
+    const password = document.getElementById('admin-new-pass').value;
+    const is_admin = document.getElementById('admin-new-isadmin').checked;
+    
+    const res = await securePost('/api/admin/users', { username, email, password, is_admin });
+    const data = await res.json();
+    if(data.error) alert(data.error);
+    else {
+        closeModal();
+        loadAdminPanel();
+    }
+}
+
+function adminPromptPassword(id, username) {
+    const html = `
+        <h2 style="color:var(--accent); margin-bottom: 20px;">Reset Password: ${escapeHtml(username)}</h2>
+        <div style="margin-bottom: 20px;">
+            <input type="password" id="admin-reset-pass" class="field-input" placeholder="New Password">
+            <div class="password-hint">Min 8 characters, 1 uppercase letter, 1 number</div>
+        </div>
+        <button id="btn-admin-reset-pass-exec" data-id="${id}">Reset Password</button>
+    `;
+    showModal(html);
+    document.getElementById('btn-admin-reset-pass-exec').addEventListener('click', (e) => adminExecutePassword(e.target.dataset.id));
+}
+
+async function adminExecutePassword(id) {
+    const password = document.getElementById('admin-reset-pass').value;
+    const res = await securePost(`/api/admin/users/${id}/password`, { password });
+    const data = await res.json();
+    if(data.error) alert(data.error);
+    else {
+        alert("Password updated.");
+        closeModal();
+    }
+}
+
+function adminPromptScore(id, username, currentAdj, currentWithheld) {
+    const isWithheld = parseInt(currentWithheld) === 1;
+    const html = `
+        <h2 style="color:var(--accent); margin-bottom: 20px;">Adjust Score: ${escapeHtml(username)}</h2>
+        <div style="margin-bottom: 15px;">
+            <label class="field-label" style="margin-bottom:5px;">Global Modifier (+/- Points)</label>
+            <input type="number" id="admin-score-adj" value="${currentAdj}" class="field-input">
+        </div>
+        
+        <div style="margin-bottom: 25px;">
+            <label class="custom-label">
+                <input type="checkbox" id="admin-score-withhold" ${isWithheld ? 'checked' : ''}>
+                <span class="checkmark"></span> Withhold from Leaderboard
+            </label>
+        </div>
+        
+        <button id="btn-admin-score-exec" data-id="${id}">Save Adjustments</button>
+    `;
+    showModal(html);
+    document.getElementById('btn-admin-score-exec').addEventListener('click', (e) => adminExecuteScore(e.target.dataset.id));
+}
+
+async function adminExecuteScore(id) {
+    const adjustment = document.getElementById('admin-score-adj').value;
+    const withheld = document.getElementById('admin-score-withhold').checked;
+
+    const res = await securePost(`/api/admin/users/${id}/score`, { adjustment, withheld });
+    const data = await res.json();
+    if(data.error) alert(data.error);
+    else {
+        closeModal();
+        loadAdminPanel();
+    }
+}
+
+async function adminDeleteUser(id, username) {
+    if(confirm(`Are you sure you want to permanently delete user '${username}' and ALL their submissions?`)) {
+        const res = await securePost(`/api/admin/users/${id}`, {}, 'DELETE');
+        const data = await res.json();
+        if(data.error) alert(data.error);
+        else loadAdminPanel();
+    }
+}
+
+async function adminViewSubmissions(userId, username) {
+    showModal(`<h2 style="color:var(--accent); margin-bottom:15px;">Submissions: ${escapeHtml(username)}</h2><div id="admin-sub-list">Loading...</div>`);
+    
+    const res = await fetch(`/api/admin/users/${userId}/submissions`);
+    const data = await res.json();
+    
+    if (data.error) {
+        document.getElementById('admin-sub-list').innerText = data.error;
+        return;
+    }
+    
+    if (data.submissions.length === 0) {
+        document.getElementById('admin-sub-list').innerHTML = "<div style='color:#888'>No submissions found.</div>";
+        return;
+    }
+    
+    let html = `<div style="max-height: 400px; overflow-y: auto;"><table class="admin-table"><thead><tr><th>ID</th><th>Lab ID</th><th>Type</th><th>Score</th><th>Date</th><th>Actions</th></tr></thead><tbody>`;
+    data.submissions.forEach(s => {
+        const dateStr = new Date(s.timestamp).toLocaleString();
+        html += `
+            <tr>
+                <td>${s.id}</td>
+                <td>${escapeHtml(s.lab_id)}</td>
+                <td>${escapeHtml(s.type)}</td>
+                <td>${s.score}/${s.max_score}</td>
+                <td>${dateStr}</td>
+                <td><button class="btn-small btn-danger btn-admin-del-sub" data-subid="${s.id}" data-userid="${userId}" data-username="${escapeHtml(username)}">Delete</button></td>
+            </tr>
+        `;
+    });
+    html += `</tbody></table></div>`;
+    document.getElementById('admin-sub-list').innerHTML = html;
+
+    document.querySelectorAll('.btn-admin-del-sub').forEach(btn => {
+        btn.addEventListener('click', (e) => adminDeleteSubmission(e.target.dataset.subid, e.target.dataset.userid, e.target.dataset.username));
+    });
+}
+
+async function adminDeleteSubmission(subId, userId, username) {
+    if(confirm(`Delete submission #${subId}?`)) {
+        const res = await securePost(`/api/admin/submissions/${subId}`, {}, 'DELETE');
+        const data = await res.json();
+        if (data.error) alert(data.error);
+        else adminViewSubmissions(userId, username);
+    }
+}

@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+
 const readline = require('readline').createInterface({
     input: process.stdin,
     output: process.stdout
@@ -21,7 +23,9 @@ const askBool = async (query) => {
         envContent = fs.readFileSync(envFile, 'utf-8');
     }
 
-    console.log("=== CSSS Configuration Setup ===\n");
+    console.log("======================================");
+    console.log("       CSSS Configuration Setup       ");
+    console.log("======================================\n");
 
     const appTitle = await question('Application title (shown on login and dashboard) [CSSS ENGINE]: ');
     const retainPka = await askBool('Retain student .pka files on the server?');
@@ -54,15 +58,39 @@ const askBool = async (query) => {
     envContent = envContent.replace(/\n\n+/g, '\n').trim() + '\n';
     fs.writeFileSync(envFile, envContent, 'utf-8');
 
-    console.log('\n--- Configuration Saved to .env ---');
-    console.log('SESSION_SECRET:     [Generated]');
-    console.log('NODE_ENV:           production');
-    console.log(`APP_TITLE:          ${appTitle.trim() || 'CSSS ENGINE'}`);
-    console.log(`RETAIN_PKA:         ${retainPka}`);
-    console.log(`RETAIN_XML:         ${retainXml}`);
-    console.log(`SHOW_LEADERBOARD:   ${showLeaderboard}`);
-    console.log(`SHOW_HISTORY:       ${showHistory}`);
-    console.log(`ALLOW_REGISTRATION: ${allowRegistration}`);
-    
+    console.log('\n--- Configuration Saved to .env ---\n');
+
+    // ADMIN ACCOUNT CREATION
+    const createAdmin = await askBool('Would you like to create an Admin account now?');
+    if (createAdmin === 'true') {
+        const db = require('./src/database.js'); // Initializes DB and runs migrations
+
+        const adminUser = await question('Admin Username: ');
+        const adminEmail = await question('Admin Email [admin@localhost]: ');
+        let adminPass = '';
+        while(adminPass.length < 8) {
+            adminPass = await question('Admin Password (min 8 chars): ');
+        }
+
+        try {
+            const hash = bcrypt.hashSync(adminPass, 10);
+            const uid = crypto.randomBytes(6).toString('hex').toUpperCase().match(/.{1,4}/g).join('-');
+            
+            const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(adminUser);
+            if (existing) {
+                db.prepare('UPDATE users SET password = ?, email = ?, is_admin = 1 WHERE id = ?').run(hash, adminEmail || 'admin@localhost', existing.id);
+                console.log(`\nSUCCESS: Existing user '${adminUser}' was updated and promoted to Admin.`);
+            } else {
+                db.prepare('INSERT INTO users (username, email, password, unique_id, is_admin) VALUES (?, ?, ?, ?, 1)')
+                  .run(adminUser, adminEmail || 'admin@localhost', hash, uid);
+                console.log(`\nSUCCESS: Admin user '${adminUser}' created successfully.`);
+            }
+        } catch (e) {
+            console.error("\nERROR creating admin:", e.message);
+        }
+    }
+
+    console.log('\nSetup Complete! Run `npm start` to boot the server.\n');
     readline.close();
+    process.exit(0);
 })();

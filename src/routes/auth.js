@@ -73,11 +73,14 @@ router.post('/register', registerLimiter, async (req, res) => {
         const uid = generateUniqueId();
         const stmt = db.prepare('INSERT INTO users (username, email, password, unique_id) VALUES (?, ?, ?, ?)');
         const info = stmt.run(userStr, emailStr, hashedPassword, uid);
-        req.session.userId = info.lastInsertRowid;
-        req.session.uniqueId = uid;
-        req.session.save((err) => {
-            if (err) return res.status(500).json({ error: "Session save failed." });
-            res.json({ success: true, unique_id: uid });
+        req.session.regenerate((err) => {
+            if (err) return res.status(500).json({ error: "Registration failed. Please try again." });
+            req.session.userId = info.lastInsertRowid;
+            req.session.uniqueId = uid;
+            req.session.save((saveErr) => {
+                if (saveErr) return res.status(500).json({ error: "Session save failed." });
+                res.json({ success: true, unique_id: uid });
+            });
         });
     } catch (err) {
         res.status(400).json({ error: "Username or Email already exists" });
@@ -116,13 +119,14 @@ router.post('/login', loginLimiter, async (req, res) => {
 
 router.get('/me', (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    res.json({ id: req.session.userId, unique_id: req.session.uniqueId });
+    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
+    res.json({ id: req.session.userId, unique_id: req.session.uniqueId, is_admin: user && user.is_admin === 1 });
 });
 
 router.get('/config', (req, res) => {
     const cfg = getConfig();
-    const safeLabs = (cfg.labs || []).map(l => ({ id: l.id, title: l.title, type: 'lab' }));
-    const safeQuizzes = (cfg.quizzes || []).map(q => ({ id: q.id, title: q.title, type: 'quiz' }));
+    const safeLabs = (cfg.labs || []).filter(l => isWindowOpen(l)).map(l => ({ id: l.id, title: l.title, type: 'lab' }));
+    const safeQuizzes = (cfg.quizzes || []).filter(q => isWindowOpen(q)).map(q => ({ id: q.id, title: q.title, type: 'quiz' }));
 
     const fullTitle = process.env.APP_TITLE || 'CSSS ENGINE';
     const parts = fullTitle.split(' ');
@@ -196,53 +200,59 @@ router.post('/lab/:id/start', (req, res) => {
         return res.status(403).json({ error: "Lab is currently closed outside of the competition window." });
     }
 
-    const existing = db.prepare("SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1")
-        .get(req.session.userId, lab.id);
+    const startSession = db.transaction(() => {
+        const existing = db.prepare("SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1")
+            .get(req.session.userId, lab.id);
 
-    if (existing) {
-        let timeRemaining = null;
-        if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
-            const startTime = new Date(existing.timestamp.replace(' ', 'T') + 'Z').getTime();
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            timeRemaining = Math.max(0, (lab.time_limit_minutes * 60) - elapsed);
+        if (existing) {
+            let timeRemaining = null;
+            if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
+                const startTime = new Date(existing.timestamp.replace(' ', 'T') + 'Z').getTime();
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                timeRemaining = Math.max(0, (lab.time_limit_minutes * 60) - elapsed);
 
-            if (timeRemaining <= 0) {
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
-                    .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), existing.id);
-                return res.status(403).json({ error: "Your previous session has expired." });
+                if (timeRemaining <= 0) {
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
+                        .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), existing.id);
+                    return { error: "Your previous session has expired.", code: 403 };
+                }
+            }
+
+            return { resumed: true, timeRemaining };
+        }
+
+        if (lab.max_submissions && lab.max_submissions > 0) {
+            const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?')
+                .get(req.session.userId, lab.id).c;
+            if (count >= lab.max_submissions) {
+                return { error: "Maximum attempts reached.", code: 403 };
             }
         }
 
-        return res.json({
-            success: true,
-            resumed: true,
-            has_pka_file: !!lab.pka_file,
-            time_remaining_seconds: timeRemaining
-        });
-    }
+        db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'lab')")
+            .run(req.session.userId, req.session.uniqueId, lab.id);
 
-    if (lab.max_submissions && lab.max_submissions > 0) {
-        const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?')
-            .get(req.session.userId, lab.id).c;
-        if (count >= lab.max_submissions) {
-            return res.status(403).json({ error: "Maximum attempts reached." });
+        let timeRemaining = null;
+        if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
+            timeRemaining = lab.time_limit_minutes * 60;
         }
-    }
 
-    db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'lab')")
-        .run(req.session.userId, req.session.uniqueId, lab.id);
-
-    let timeRemaining = null;
-    if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
-        timeRemaining = lab.time_limit_minutes * 60;
-    }
-
-    res.json({
-        success: true,
-        resumed: false,
-        has_pka_file: !!lab.pka_file,
-        time_remaining_seconds: timeRemaining
+        return { resumed: false, timeRemaining };
     });
+
+    try {
+        const result = startSession();
+        if (result.error) return res.status(result.code).json({ error: result.error });
+
+        res.json({
+            success: true,
+            resumed: result.resumed,
+            has_pka_file: !!lab.pka_file,
+            time_remaining_seconds: result.timeRemaining
+        });
+    } catch (err) {
+        res.status(500).json({ error: "An internal error occurred." });
+    }
 });
 
 router.get('/lab/:id/download', (req, res) => {
@@ -307,7 +317,7 @@ router.get('/leaderboard', (req, res) => {
     const quizzes = cfg.quizzes || [];
     const allChallenges = [...labs, ...quizzes];
 
-    const users = db.prepare('SELECT id, username FROM users').all();
+    const users = db.prepare('SELECT id, username, score_adjustment, withheld FROM users').all();
     const leaderboard = [];
 
     users.forEach(u => {
@@ -334,13 +344,31 @@ router.get('/leaderboard', (req, res) => {
                 total += score;
             }
         });
+
+        // Apply global modifier
+        if (u.score_adjustment) {
+            total += u.score_adjustment;
+        }
         
+        // Ensure total doesn't dip below 0
+        if (total < 0) total = 0;
+
         if (total > 0 || Object.values(scores).some(s => s === '?')) {
-            leaderboard.push({ username: u.username, scores: scores, total_score: total });
+            leaderboard.push({ 
+                username: u.username, 
+                scores: scores, 
+                total_score: u.withheld ? 'W' : total 
+            });
         }
     });
 
-    leaderboard.sort((a, b) => b.total_score - a.total_score);
+    leaderboard.sort((a, b) => {
+        if (a.total_score === 'W' && b.total_score !== 'W') return 1;
+        if (a.total_score !== 'W' && b.total_score === 'W') return -1;
+        if (a.total_score === 'W' && b.total_score === 'W') return 0;
+        return b.total_score - a.total_score;
+    });
+
     const headers = allChallenges.map(c => ({ id: c.id, title: c.title }));
     res.json({ success: true, labs: headers, leaderboard: leaderboard });
 });

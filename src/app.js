@@ -15,9 +15,11 @@ const db = require('./database');
 const { getConfig, getRawConfig, isWindowOpen } = require('./config');
 const authRoutes = require('./routes/auth');
 const quizRoutes = require('./routes/quiz');
-
+const adminRoutes = require('./routes/admin'); // ADD THIS
 const app = express();
-app.set('trust proxy', 1);
+if (process.env.TRUST_PROXY) {
+    app.set('trust proxy', parseInt(process.env.TRUST_PROXY) || 1);
+}
 
 const server = http.createServer(app);
 
@@ -55,6 +57,9 @@ app.use((req, res, next) => {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (process.env.NODE_ENV === 'production') {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
     res.setHeader('Content-Security-Policy', 
         "default-src 'self'; " +
         "script-src 'self'; " +
@@ -96,7 +101,7 @@ app.get('/health', (req, res) => {
 app.use(express.static(path.join(__dirname, '../public')));
 app.use('/api', authRoutes);
 app.use('/api/quiz', quizRoutes);
-
+app.use('/api/admin', adminRoutes);
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../index.html')));
 
 const MAX_WORKERS = parseInt(process.env.MAX_WORKERS) || 4;
@@ -220,6 +225,9 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
+// Initialize a global registry to track active socket connections by user ID
+global.activeUserSockets = global.activeUserSockets || new Map();
+
 io.on('connection', (socket) => {
     let socketUser = null;
     let isAuthenticated = false;
@@ -236,6 +244,23 @@ io.on('connection', (socket) => {
                 socketUser = user;
                 isAuthenticated = true;
                 authInProgress = false;
+
+                // Track the socket for active session management
+                if (!global.activeUserSockets.has(user.id)) {
+                    global.activeUserSockets.set(user.id, new Set());
+                }
+                global.activeUserSockets.get(user.id).add(socket);
+
+                socket.on('disconnect', () => {
+                    const userSet = global.activeUserSockets.get(user.id);
+                    if (userSet) {
+                        userSet.delete(socket);
+                        if (userSet.size === 0) {
+                            global.activeUserSockets.delete(user.id);
+                        }
+                    }
+                });
+
                 socket.emit('auth_success', user.unique_id);
                 return;
             }
@@ -370,5 +395,5 @@ setInterval(() => {
     }
 }, 24 * 60 * 60 * 1000);
 
-const PORT = 10000;
+const PORT = parseInt(process.env.PORT) || 10000;
 server.listen(PORT, () => console.log(`CSSS Server running on http://localhost:${PORT}`));
