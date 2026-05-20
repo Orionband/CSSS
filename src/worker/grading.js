@@ -1,5 +1,11 @@
-﻿const { getXmlValue } = require('./parser');
+const { getXmlValue } = require('./parser');
 const CryptMD5 = require('cryptmd5');
+const RE2 = (() => { try { return require('re2'); } catch { return null; } })();
+
+function safeRegex(pattern, flags) {
+    if (RE2) return new RE2(pattern, flags);
+    return new RegExp(pattern, flags);
+}
 
 function verifyType5(password, storedHash) {
     if (typeof storedHash !== 'string' || !storedHash.startsWith('$1$')) {
@@ -46,7 +52,7 @@ function evaluateCondition(device, condition) {
         const actual = getXmlValue(device.xmlRoot, condition.path);
         if (actual !== undefined && actual !== null) {
             try {
-                const re = new RegExp(condition.value);
+                const re = safeRegex(condition.value);
                 result = re.test(String(actual));
             } catch (e) { result = false; }
         }
@@ -69,7 +75,7 @@ function evaluateCondition(device, condition) {
         if (targetLines) {
             if (type === 'ConfigRegex') {
                 try {
-                    const regex = new RegExp(condition.value);
+                    const regex = safeRegex(condition.value);
                     result = targetLines.some(l => regex.test(l));
                 } catch (e) { result = false; }
             }

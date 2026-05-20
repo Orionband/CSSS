@@ -7,3 +7,5 @@ lab.conf
 quiz.conf
 combined.txt
 .env
+grader.db-shm
+grader.db-wal

@@ -1,4 +1,4 @@
-﻿/* --- VARIABLES --- */
+/* --- VARIABLES --- */
 :root {
     --bg: #101010;
     --container-bg: #262626;
@@ -53,7 +53,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 /* --- COMPONENTS --- */
 .componentContainer {
     background: var(--container-bg);
-    border-radius: 2px;
+    border-radius: 6px;
     padding: 25px;
     margin-bottom: 20px;
     box-shadow: 0 4px 10px rgba(0,0,0,0.3);
@@ -61,7 +61,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 }
 
 /* --- INPUTS & BUTTONS --- */
-input[type="text"], input[type="password"], input[type="email"], .quiz-text-input {
+input[type="text"], input[type="password"], input[type="email"], input[type="number"], .quiz-text-input, .field-input {
     background: var(--input-bg);
     color: var(--text);
     width: 100%;
@@ -72,9 +72,9 @@ input[type="text"], input[type="password"], input[type="email"], .quiz-text-inpu
     font-size: 11pt;
     font-family: 'Roboto Mono', monospace;
     display: block;
-    transition: border-color 0.2s;
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
-input:focus, .quiz-text-input:focus { 
+input:focus, .quiz-text-input:focus, .field-input:focus { 
     outline: none; 
     border-color: var(--accent); 
     box-shadow: 0 0 5px rgba(240, 93, 94, 0.3);
@@ -101,8 +101,21 @@ button:active { transform: translateY(1px); outline: none; }
 
 .btn-secondary { background: #444; color: #fff; }
 .btn-secondary:hover { background: #555; }
+.btn-danger { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+.btn-danger:hover { background: rgba(240, 93, 94, 0.1); }
+.btn-small { padding: 6px 12px; font-size: 0.8rem; width: auto; margin: 0; }
 
-/* --- CUSTOM RADIO & CHECKBOX --- */
+/* --- CHECKBOXES (Custom) --- */
+.custom-label { display: inline-flex; align-items: center; position: relative; padding-left: 28px; cursor: pointer; font-size: 0.95rem; color: #ccc; user-select: none; margin: 10px 0;}
+.custom-label input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
+.checkmark { position: absolute; top: 50%; left: 0; transform: translateY(-50%); height: 18px; width: 18px; background-color: #222; border: 1px solid #555; border-radius: 3px; transition: 0.2s; }
+.custom-label:hover input ~ .checkmark { background-color: #333; border-color: #777;}
+.custom-label input:checked ~ .checkmark { background-color: var(--accent); border-color: var(--accent); }
+.checkmark:after { content: ""; position: absolute; display: none; }
+.custom-label input:checked ~ .checkmark:after { display: block; }
+.custom-label .checkmark:after { left: 6px; top: 2px; width: 4px; height: 9px; border: solid #101010; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+/* --- QUIZ OPTIONS --- */
 .quiz-options label {
     display: flex;
     align-items: center;
@@ -152,11 +165,18 @@ button:active { transform: translateY(1px); outline: none; }
     font-weight: bold;
 }
 
+/* --- MODALS --- */
+.modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(2px); }
+.modal-content { background: var(--container-bg); padding: 35px; border-radius: 6px; width: 500px; max-width: 90%; max-height: 90vh; overflow-y: auto; border: 1px solid #444; position: relative; box-shadow: 0 15px 40px rgba(0,0,0,0.6); }
+.modal-close { position: absolute; right: 20px; top: 15px; cursor: pointer; font-size: 1.8rem; color: #888; transition: color 0.2s;}
+.modal-close:hover { color: var(--accent); }
+
 /* --- LAYOUT --- */
 .center-wrapper { display: flex; height: 100vh; width: 100vw; align-items: center; justify-content: center; background: radial-gradient(circle at center, #1a1a1a 0%, #101010 100%); }
 .auth-box { width: 400px; max-width: 90%; text-align: left; }
 .auth-link { margin-top: 15px; font-size: 0.9rem; text-align: center; color: var(--text-dim); }
 .error-msg { color: var(--accent); margin-top: 15px; text-align: center; font-weight: bold; }
+.password-hint { color: var(--text-dim); font-size: 0.8rem; margin: 2px 0 8px 2px; }
 
 #app-view { display: flex; height: 100vh; width: 100vw; }
 
@@ -202,29 +222,30 @@ button:active { transform: translateY(1px); outline: none; }
 .quiz-feedback.missed { background: rgba(77,166,255,0.1); border-left: 3px solid #4da6ff; color: #4da6ff; }
 
 /* --- DOWNLOAD LINK (Labs & Quiz PKA) --- */
-.lab-download-link {
-    display: inline-block;
-    padding: 12px 20px;
-    background: var(--accent);
-    color: #101010;
-    text-decoration: none;
-    border-radius: 4px;
-    font-weight: bold;
-    font-family: 'Roboto Mono', monospace;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    transition: background 0.2s, transform 0.1s;
-    cursor: pointer;
-}
-.lab-download-link:hover {
-    background: var(--accent-hover);
-    transform: translateY(-1px);
-    text-decoration: none;
-    color: #101010;
-}
-.lab-download-link:active {
-    transform: translateY(1px);
-}
+.lab-download-link { display: inline-block; padding: 12px 20px; background: var(--accent); color: #101010; text-decoration: none; border-radius: 4px; font-weight: bold; font-family: 'Roboto Mono', monospace; font-size: 0.95rem; text-transform: uppercase; transition: background 0.2s, transform 0.1s; cursor: pointer; }
+.lab-download-link:hover { background: var(--accent-hover); transform: translateY(-1px); text-decoration: none; color: #101010; }
+.lab-download-link:active { transform: translateY(1px); }
+
+/* --- ADMIN PANEL UI --- */
+.admin-container { padding: 0; overflow: hidden; display: flex; flex-direction: column; height: calc(100vh - 80px); background: var(--container-bg); border-radius: 6px; border: 1px solid #333; box-shadow: 0 4px 10px rgba(0,0,0,0.3);}
+.admin-header { padding: 20px 25px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: #1a1a1a; flex-shrink: 0;}
+.admin-tabs { display: flex; gap: 10px; }
+.admin-tab { padding: 8px 16px; cursor: pointer; border-radius: 4px; font-weight: bold; font-size: 0.9rem; color: #888; transition: 0.2s; user-select: none; }
+.admin-tab:hover { background: #2a2a2a; color: #fff; }
+.admin-tab.active { background: var(--accent); color: #101010; }
+
+.admin-panel-content { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.admin-toolbar { padding: 15px 25px; display: flex; justify-content: flex-end; border-bottom: 1px solid var(--border); background: #222; flex-shrink: 0;}
+
+.table-wrapper { flex: 1; overflow-y: auto; }
+.admin-table { width: 100%; text-align: left; border-collapse: collapse; font-size: 0.9rem; }
+.admin-table th { position: sticky; top: 0; background: #1a1a1a; padding: 15px 20px; color: var(--text-dim); z-index: 10; border-bottom: 2px solid #333; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px;}
+.admin-table td { padding: 12px 20px; border-bottom: 1px solid #333; vertical-align: middle; }
+.admin-table tbody tr { transition: background 0.1s; }
+.admin-table tbody tr:hover { background: #222; }
+
+.action-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.badge { padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-left: 8px; vertical-align: middle;}
 
 /* GRADER LAB RESULTS NESTING */
 .result-group { margin-bottom: 10px; border: 1px solid #333; border-radius: 4px; background: #1a1a1a; overflow: hidden; }
@@ -263,6 +284,7 @@ button:active { transform: translateY(1px); outline: none; }
 .hist-type { font-size: 0.7rem; padding: 2px 4px; border-radius: 2px; margin-right: 5px; text-transform: uppercase; font-weight: bold; }
 .type-lab { background: #333; color: #fff; }
 .type-quiz { background: var(--accent); color: #101010; }
+
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; padding: 10px; border-bottom: 2px solid #333; color: var(--text-dim); text-transform: uppercase; font-size: 0.9rem; }
 td { padding: 15px 10px; border-bottom: 1px solid #333; }

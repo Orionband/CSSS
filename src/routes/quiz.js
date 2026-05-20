@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../database');
 const { getConfig, isWindowOpen } = require('../config');
+const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
 const router = express.Router();
 
 function safeObject() {
@@ -85,7 +86,7 @@ router.get('/asset/:type/:filename', (req, res) => {
 
         if (!containsAsset) continue;
 
-        const activeSession = db.prepare("SELECT id FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress'")
+        const activeSession = db.prepare("SELECT id FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz'")
             .get(req.session.userId, q.id);
         
         if (activeSession) {
@@ -153,40 +154,50 @@ router.post('/:id/start', (req, res) => {
         return res.status(403).json({ error: "Quiz is currently closed outside of the competition window." });
     }
 
-    const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
-
     let timeRemaining = quiz.time_limit_minutes * 60;
 
-    if (existingInProgress) {
-        if (quiz.time_limit_minutes > 0) {
-            const startTime = parseDbTime(existingInProgress.timestamp);
-            const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
-            timeRemaining = Math.max(0, timeRemaining - elapsedSeconds);
+    const startQuiz = db.transaction(() => {
+        const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
 
-            if (timeRemaining <= 0) {
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
-                  .run(JSON.stringify([{message: "Time expired", correct: false}]), existingInProgress.id);
-                return res.status(403).json({ error: "Time limit expired for this attempt." });
-            }
-        }
-    } else {
-        const rateLimitCount = quiz.rate_limit_count || 0;
-        const rateLimitWindow = quiz.rate_limit_window_seconds || 60;
-        
-        if (rateLimitCount > 0) {
-            const recent = db.prepare("SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')").get(req.session.userId, quiz.id, rateLimitWindow).c;
-            if (recent >= rateLimitCount) {
-                return res.status(429).json({ error: "Rate limit exceeded. Please wait before starting another attempt." });
-            }
-        }
+        if (existingInProgress) {
+            if (quiz.time_limit_minutes > 0) {
+                const startTime = parseDbTime(existingInProgress.timestamp);
+                const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                timeRemaining = Math.max(0, timeRemaining - elapsedSeconds);
 
-        if (quiz.max_attempts > 0) {
-            const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
-            if (attempts >= quiz.max_attempts) return res.status(403).json({ error: "Maximum attempts reached." });
+                if (timeRemaining <= 0) {
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
+                      .run(JSON.stringify([{message: "Time expired", correct: false}]), existingInProgress.id);
+                    return { error: "Time limit expired for this attempt.", code: 403 };
+                }
+            }
+        } else {
+            const rateLimitCount = quiz.rate_limit_count || 0;
+            const rateLimitWindow = quiz.rate_limit_window_seconds || 60;
+            
+            if (rateLimitCount > 0) {
+                const recent = db.prepare("SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')").get(req.session.userId, quiz.id, rateLimitWindow).c;
+                if (recent >= rateLimitCount) {
+                    return { error: "Rate limit exceeded. Please wait before starting another attempt.", code: 429 };
+                }
+            }
+
+            if (quiz.max_attempts > 0) {
+                const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
+                if (attempts >= quiz.max_attempts) return { error: "Maximum attempts reached.", code: 403 };
+            }
+            
+            db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'quiz')")
+              .run(req.session.userId, req.session.uniqueId, quiz.id);
         }
-        
-        db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'quiz')")
-          .run(req.session.userId, req.session.uniqueId, quiz.id);
+        return { success: true };
+    });
+
+    try {
+        const result = startQuiz();
+        if (result.error) return res.status(result.code).json({ error: result.error });
+    } catch (e) {
+        return res.status(500).json({ error: "An internal error occurred." });
     }
 
     const safeQuestions = quiz.questions.map((q, idx) => {
@@ -225,7 +236,7 @@ router.post('/:id/submit', (req, res) => {
             return res.status(403).json({ error: "Submissions are currently closed outside of the competition window." });
         }
 
-        const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
+        const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
 
         if (!existingInProgress) {
             return res.status(403).json({ error: "No active quiz session found." });
@@ -280,7 +291,7 @@ router.post('/:id/submit', (req, res) => {
                 if (typeof input === 'string' && input.trim() !== '') {
                     const sanitizedInput = input.trim().substring(0, 200);
                     try {
-                        const re = new RegExp(q.regex, 'i');
+                        const re = new RE2(q.regex, 'i'); // Safe against ReDoS
                         if (re.test(sanitizedInput)) isCorrect = true;
                     } catch (e) {} 
                 }

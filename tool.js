@@ -4,6 +4,14 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const { customAlphabet } = require('nanoid');
+
+function generateUniqueId() {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const nanoid = customAlphabet(alphabet, 12);
+    const id = nanoid();
+    return id.match(/.{1,4}/g).join('-');
+}
 
 const dbPath = path.join(__dirname, 'grader.db');
 
@@ -194,7 +202,7 @@ async function deleteUser() {
 function genRandomPassword(len = 12) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=';
   let out = '';
-  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < len; i++) out += chars[crypto.randomInt(chars.length)];
   return out;
 }
 
@@ -304,7 +312,7 @@ async function createUser() {
         console.log('Generated password:', pw);
     }
 
-    const uid = crypto.randomBytes(6).toString('hex');
+    const uid = generateUniqueId();
     const hash = bcrypt.hashSync(pw, 10);
 
     backupDb();

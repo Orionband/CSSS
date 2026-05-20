@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -12,6 +12,14 @@
 
     <!-- LOADING OVERLAY -->
     <div id="loading-view">CSSS LOADING...</div>
+
+    <!-- ADMIN MODALS -->
+    <div id="modal-container" class="modal hidden">
+        <div class="modal-content" id="modal-box">
+            <span class="modal-close" id="modal-close-btn">×</span>
+            <div id="modal-inner"></div>
+        </div>
+    </div>
 
     <!-- AUTH VIEW -->
     <div id="auth-view" class="center-wrapper hidden">
@@ -37,6 +45,7 @@
                     <input type="text" id="r-user" placeholder="Username">
                     <input type="email" id="r-email" placeholder="Email">
                     <input type="password" id="r-pass" placeholder="Password">
+                    <div class="password-hint">Min 8 characters, 1 uppercase letter, 1 number</div>
                     <button id="btn-register-submit">Create Account >></button>
                     <div class="auth-link">
                         Already have an account? <a id="link-show-login">Login</a>
@@ -64,26 +73,19 @@
         <main class="main-content">
             
             <div id="view-grader" class="hidden">
-                <!-- LAB START SCREEN -->
                 <div id="lab-start-screen" class="componentContainer">
                     <h2 id="lab-title">Challenge</h2>
                     <div id="lab-info-area"></div>
                 </div>
-
-                <!-- LAB ACTIVE SCREEN -->
                 <div id="lab-active-screen" class="hidden">
                     <div class="componentContainer">
                         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px;">
                             <h2 id="lab-active-title" style="margin:0">Lab In Progress</h2>
                             <div id="lab-timer" class="quiz-timer"></div>
                         </div>
-                        
                         <div id="lab-download-area" class="hidden" style="margin-bottom: 20px;">
-                            <a id="lab-download-btn" class="lab-download-link">
-                                 Downlaod Lab File
-                            </a>
+                            <a id="lab-download-btn" class="lab-download-link">Download Lab File</a>
                         </div>
-
                         <p>Upload your completed Packet Tracer file (.pka/.pkt) to be graded.</p>
                         <div class="upload-area" id="upload-area-box">
                             <div style="font-size: 3rem; color: var(--accent); margin-bottom: 15px;">[ + ]</div>
@@ -113,7 +115,6 @@
                     <div id="quiz-questions-area"></div>
                     <button id="btn-submit-quiz">Submit Answers >></button>
                 </div>
-                
                 <div id="quiz-result" class="componentContainer hidden">
                     <h2 style="color:var(--accent)">Quiz Results</h2>
                     <div id="quiz-score-display" style="font-size:1.5rem; font-weight:bold; margin-bottom:20px"></div>
@@ -124,10 +125,12 @@
             <div id="view-leaderboard" class="hidden">
                 <div class="componentContainer">
                     <h2>Leaderboard</h2>
-                    <table id="lb-table">
-                        <thead><tr></tr></thead>
-                        <tbody id="lb-body"></tbody>
-                    </table>
+                    <div style="overflow-x: auto;">
+                        <table id="lb-table">
+                            <thead><tr></tr></thead>
+                            <tbody id="lb-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -147,6 +150,56 @@
                     </div>
                     <div id="hist-checks"></div>
                     <button class="btn-secondary" id="btn-close-history" style="margin-top:20px; width: auto;"><< Back</button>
+                </div>
+            </div>
+
+            <!-- ADMIN VIEW -->
+            <div id="view-admin" class="hidden">
+                <div class="admin-container">
+                    <div class="admin-header">
+                        <h2 style="margin:0; color:var(--accent)">[ ADMIN PANEL ]</h2>
+                        <div class="admin-tabs">
+                            <div class="admin-tab active" id="tab-admin-users">Manage Users</div>
+                            <div class="admin-tab" id="tab-admin-lb">Manage Leaderboard</div>
+                        </div>
+                    </div>
+                    
+                    <div id="admin-panel-users" class="admin-panel-content">
+                        <div class="admin-toolbar">
+                            <button class="btn-secondary btn-small" id="btn-admin-new-user" style="margin:0;">+ Create New User</button>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="admin-table" id="admin-users-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Username</th>
+                                        <th>Subs</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-users-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="admin-panel-lb" class="admin-panel-content hidden">
+                        <div class="table-wrapper">
+                            <table class="admin-table" id="admin-lb-table">
+                                <thead>
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Raw LB Score</th>
+                                        <th>Global Mod (+/-)</th>
+                                        <th>Total Score</th>
+                                        <th>Withheld?</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="admin-lb-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
 
