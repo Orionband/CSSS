@@ -1,9 +1,10 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const db = require('../database');
-const { getConfig, isWindowOpen } = require('../config');
-const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
+ const path = require('path');
+ const fs = require('fs');
+ const crypto = require('crypto');
+ const db = require('../database');
+ const { getConfig, isWindowOpen } = require('../config');
+ const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
 const router = express.Router();
 
 function safeObject() {
@@ -133,13 +134,35 @@ router.get('/:id', (req, res) => {
         attemptsTaken = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
     } catch(e) {}
 
+    let sessionActive = false;
+    let timeRemaining = null;
+    const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
+
+    if (existingInProgress) {
+        sessionActive = true;
+        if (quiz.time_limit_minutes > 0) {
+            const startTime = parseDbTime(existingInProgress.timestamp);
+            const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+            timeRemaining = Math.max(0, (quiz.time_limit_minutes * 60) - elapsedSeconds);
+
+            if (timeRemaining <= 0) {
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
+                  .run(JSON.stringify([{message: "Time expired", correct: false}]), existingInProgress.id);
+                sessionActive = false;
+                timeRemaining = null;
+            }
+        }
+    }
+
     res.json({
         id: quiz.id,
         title: quiz.title,
         time_limit: quiz.time_limit_minutes,
         max_attempts: quiz.max_attempts || 0,
         attempts_taken: attemptsTaken,
-        question_count: quiz.questions.length
+        question_count: quiz.questions.length,
+        session_active: sessionActive,
+        time_remaining_seconds: timeRemaining
     });
 });
 
@@ -200,23 +223,26 @@ router.post('/:id/start', (req, res) => {
         return res.status(500).json({ error: "An internal error occurred." });
     }
 
-    const safeQuestions = quiz.questions.map((q, idx) => {
-        const base = { 
-            id: idx, text: q.text, type: q.type, 
-            image: q.image, pka: q.pka, points: q.points !== undefined ? parseInt(q.points) : 1 
-        };
-        
-        if (q.type === 'radio' || q.type === 'checkbox') {
+    const matchingMappings = {};
+        const safeQuestions = quiz.questions.map((q, idx) => {
+          const base = { id: idx, text: q.text, type: q.type, image: q.image, pka: q.pka, points: q.points !== undefined ? parseInt(q.points) : 1 };
+          if (q.type === 'radio' || q.type === 'checkbox') {
             base.answers = q.answers.map((a, aIdx) => ({ id: aIdx, text: a.text }));
-        } else if (q.type === 'matching') {
-            const rightOptions = q.pairs.map((p, pIdx) => ({ id: pIdx, text: p.right }));
+          } else if (q.type === 'matching') {
+            const rightOptions = q.pairs.map((p, pIdx) => {
+              const opaqueId = crypto.randomBytes(8).toString('hex');
+              matchingMappings[`${idx}_${pIdx}`] = opaqueId;
+              return { id: opaqueId, text: p.right };
+            });
             base.leftItems = q.pairs.map((p, pIdx) => ({ id: pIdx, text: p.left }));
             base.rightOptions = shuffle(rightOptions);
-        }
-        return base;
-    });
-
-    res.json({ questions: safeQuestions, time_remaining_seconds: timeRemaining });
+          }
+          return base;
+        });
+        if (!req.session.quizMappings) req.session.quizMappings = {};
+        req.session.quizMappings[quiz.id] = matchingMappings;
+        req.session.save(() => {});
+        res.json({ questions: safeQuestions, time_remaining_seconds: timeRemaining });
 });
 
 router.post('/:id/submit', (req, res) => {
@@ -297,24 +323,26 @@ router.post('/:id/submit', (req, res) => {
                 }
             }
             else if (q.type === 'matching') {
-                if (input && typeof input === 'object' && !Array.isArray(input)) {
-                    const totalPairs = q.pairs.length;
-                    let matches = 0;
-                    let validEntries = 0;
-                    
-                    for (let pairIdx = 0; pairIdx < totalPairs; pairIdx++) {
-                        const key = String(pairIdx);
-                        if (key in input) {
+                    if (input && typeof input === 'object' && !Array.isArray(input)) {
+                      const mappings = req.session.quizMappings && req.session.quizMappings[quiz.id];
+                      if (mappings) {
+                        const totalPairs = q.pairs.length;
+                        let matches = 0;
+                        let validEntries = 0;
+                        for (let pairIdx = 0; pairIdx < totalPairs; pairIdx++) {
+                          const key = String(pairIdx);
+                          if (key in input) {
                             validEntries++;
-                            const val = parseInt(input[key]);
-                            if (!isNaN(val) && val >= 0 && val < totalPairs && pairIdx === val) {
-                                matches++;
+                            const expectedOpaqueId = mappings[`${idx}_${pairIdx}`];
+                            if (expectedOpaqueId && String(input[key]) === String(expectedOpaqueId)) {
+                              matches++;
                             }
+                          }
                         }
+                        if (matches === totalPairs && validEntries === totalPairs) isCorrect = true;
+                      }
                     }
-                    if (matches === totalPairs && validEntries === totalPairs) isCorrect = true;
-                }
-            }
+                  }
 
             const pts = (q.points !== undefined && !isNaN(parseInt(q.points))) ? parseInt(q.points) : 1;
             maxScore += pts;
@@ -349,6 +377,10 @@ router.post('/:id/submit', (req, res) => {
         });
     } finally {
         db.releaseLock(lockKey);
+        if (req.session.quizMappings && req.session.quizMappings[quiz.id]) {
+            delete req.session.quizMappings[quiz.id];
+            req.session.save(() => {});
+        }
     }
 });
 

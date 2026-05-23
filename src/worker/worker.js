@@ -2,14 +2,16 @@
 const zlib = require('zlib');
 const toml = require('toml');
 const xml2js = require('xml2js');
+const fs = require('fs');
 const { xor, cmac, decryptCTR } = require('./crypto');
 const { parseCiscoConfig } = require('./parser');
 const { evaluateCondition } = require('./grading');
 
 (async () => {
     try {
-        const { fileData, configData, labId, maxXmlMb } = workerData;
-        const inputBuffer = Buffer.from(fileData);
+        const { tempFilePath, configData, labId, maxXmlMb } = workerData;
+        const inputBuffer = fs.readFileSync(tempFilePath);
+        
         const totalBytes = inputBuffer.length;
         const safeTotal = totalBytes > 0 ? totalBytes : 1;
         
@@ -77,7 +79,6 @@ const { evaluateCondition } = require('./grading');
         if (!labConfig) throw new Error("Lab configuration not found.");
 
         finalXML = stripDoctypeCompletely(finalXML);
-        finalXML = finalXML.replace(/<!ENTITY[^>]*>/gi, "");
         finalXML = finalXML.replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
 
         const parser = new xml2js.Parser({
@@ -189,36 +190,10 @@ const { evaluateCondition } = require('./grading');
 })();
 
 function stripDoctypeCompletely(xml) {
-    let result = xml;
-    let safety = 0;
-    
-    while (safety < 10) {
-        const dtStart = result.search(/<!DOCTYPE/i);
-        if (dtStart === -1) break;
-        
-        let depth = 0;
-        let i = dtStart;
-        let found = false;
-        
-        for (; i < result.length; i++) {
-            if (result[i] === '[') depth++;
-            else if (result[i] === ']') depth--;
-            else if (result[i] === '>' && depth <= 0) {
-                found = true;
-                break;
-            }
-        }
-        
-        if (found) {
-            result = result.substring(0, dtStart) + result.substring(i + 1);
-        } else {
-            result = result.substring(0, dtStart);
-            break;
-        }
-        safety++;
+    if (/<!DOCTYPE/i.test(xml) || /<!ENTITY/i.test(xml)) {
+        throw new Error("Invalid XML: DOCTYPE and ENTITY declarations are strictly forbidden.");
     }
-    
-    return result;
+    return xml;
 }
 
 function sanitizeErrorMessage(rawMessage) {

@@ -1,5 +1,6 @@
 const { getXmlValue } = require('./parser');
 const CryptMD5 = require('cryptmd5');
+const crypto = require('crypto');
 const RE2 = (() => { try { return require('re2'); } catch { return null; } })();
 
 function safeRegex(pattern, flags) {
@@ -20,7 +21,12 @@ function verifyType5(password, storedHash) {
     const salt = parts[2];
     try {
         const computed = CryptMD5.cryptMD5(password, salt);
-        return computed === storedHash;
+        
+        const a = Buffer.from(computed);
+        const b = Buffer.from(storedHash);
+        
+        if (a.length !== b.length) return false;
+        return crypto.timingSafeEqual(a, b);
     } catch (e) {
         return false;
     }

@@ -83,13 +83,21 @@ router.post('/register', registerLimiter, async (req, res) => {
             });
         });
     } catch (err) {
-        res.status(400).json({ error: "Username or Email already exists" });
+        // Redefined to prevent account enumeration / reconnaissance (VULN-D)
+        res.status(400).json({ error: "Registration failed. Please try different details." });
     }
 });
 
 router.post('/logout', (req, res) => {
+    const userId = req.session && req.session.userId;
     req.session.destroy(err => {
         res.clearCookie('connect.sid'); 
+        if (userId && global.activeUserSockets) {
+            const userSockets = global.activeUserSockets.get(userId);
+            if (userSockets) {
+                userSockets.forEach(s => s.disconnect(true));
+            }
+        }
         res.json({ success: true });
     });
 });
@@ -133,8 +141,9 @@ router.get('/config', (req, res) => {
     let titleMain = parts[0] || '';
     let titleHighlight = parts.slice(1).join(' ') || '';
 
+    const isAuthenticated = req.session && req.session.userId;
     res.json({ 
-        challenges: [...safeLabs, ...safeQuizzes],
+        challenges: isAuthenticated ? [...safeLabs, ...safeQuizzes] : [],
         options: { 
             show_leaderboard: process.env.SHOW_LEADERBOARD === 'true',
             show_history: process.env.SHOW_HISTORY === 'true',
