@@ -2,7 +2,27 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../database');
 const { customAlphabet } = require('nanoid');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
+
+const adminLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many admin requests. Please try again later." }
+});
+
+const adminAuditLog = (req, res, next) => {
+  const userId = req.session && req.session.userId;
+  const method = req.method;
+  const path = req.path;
+  console.log(`[ADMIN AUDIT] user_id=${userId} method=${method} path=${path} ip=${req.ip}`);
+  next();
+};
+
+router.use(adminLimiter);
+router.use(adminAuditLog);
 
 function generateUniqueId() { 
 	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -73,6 +93,11 @@ router.delete('/users/:id', (req, res) => {
             userSockets.forEach(s => s.disconnect(true));
         }
 
+        // Destroy HTTP sessions for deleted user (VULN-C)
+        try {
+            db.prepare("DELETE FROM sessions WHERE sess LIKE ?").run(`%"userId":${targetId}%`);
+        } catch (e) {}
+
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: "Failed to delete user." });
@@ -97,6 +122,11 @@ router.post('/users/:id/password', async (req, res) => {
         if (userSockets) {
             userSockets.forEach(s => s.disconnect(true));
         }
+
+        // Destroy HTTP sessions for updated user (VULN-C)
+        try {
+            db.prepare("DELETE FROM sessions WHERE sess LIKE ?").run(`%"userId":${targetId}%`);
+        } catch (e) {}
 
         res.json({ success: true });
     } catch (e) {

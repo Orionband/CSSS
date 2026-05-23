@@ -15,7 +15,7 @@ const db = require('./database');
 const { getConfig, getRawConfig, isWindowOpen } = require('./config');
 const authRoutes = require('./routes/auth');
 const quizRoutes = require('./routes/quiz');
-const adminRoutes = require('./routes/admin'); // ADD THIS
+const adminRoutes = require('./routes/admin'); 
 const app = express();
 if (process.env.TRUST_PROXY) {
     app.set('trust proxy', parseInt(process.env.TRUST_PROXY) || 1);
@@ -33,7 +33,7 @@ let globalMaxUploadMB = 75;
 
 const io = new Server(server, { maxHttpBufferSize: globalMaxUploadMB * 1024 * 1024 }); 
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 const sessionMiddleware = session({
     store: new SqliteStore({ client: db, expired: { clear: true, intervalMs: 900000 } }),
@@ -50,6 +50,21 @@ const sessionMiddleware = session({
 
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
+
+// Verify user existence dynamically on HTTP access (VULN-C ghost session prevent)
+app.use((req, res, next) => {
+    if (req.session && req.session.userId) {
+        const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.session.userId);
+        if (!user) {
+            req.session.destroy(() => {
+                res.clearCookie('connect.sid');
+                return res.status(401).json({ error: "Session invalidated: Account no longer exists." });
+            });
+            return;
+        }
+    }
+    next();
+});
 
 // Security headers
 app.use((req, res, next) => {
@@ -109,6 +124,12 @@ let activeWorkers = 0;
 const workerQueue = [];
 const MAX_QUEUE_DEPTH = parseInt(process.env.MAX_QUEUE_DEPTH) || 50;
 
+const cleanupTempFile = (filePath) => {
+    if (filePath && fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+    }
+};
+
 function processWorkerQueue() {
     if (workerQueue.length === 0 || activeWorkers >= MAX_WORKERS) return;
     activeWorkers++;
@@ -123,6 +144,7 @@ function processWorkerQueue() {
         socket.emit('err', "Processing timed out.");
         db.releaseLock(lockKey);
         worker.terminate();
+        cleanupTempFile(task.tempFilePath);
         activeWorkers--;
         processWorkerQueue();
     }, WORKER_TIMEOUT_MS);
@@ -131,45 +153,52 @@ function processWorkerQueue() {
         if (msg.type === 'progress') socket.emit('progress', msg);
         else if (msg.type === 'result') {
             clearTimeout(timeoutHandle);
-            const { grading } = msg;
-            const timestamp = Date.now();
-            const capturesDir = path.join(__dirname, '../captures');
+            try {
+                const { grading } = msg;
+                const timestamp = Date.now();
+                const capturesDir = path.join(__dirname, '../captures');
 
-            if (inProgressId) {
-                db.prepare("UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ?")
-                    .run(grading.total, grading.max, JSON.stringify(grading.serverBreakdown), inProgressId);
-            } else {
-                db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-                    .run(socketUser.id, socketUser.unique_id, targetLab.id, grading.total, grading.max, JSON.stringify(grading.serverBreakdown), 'lab', 'completed');
+                if (inProgressId) {
+                    db.prepare("UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ?")
+                        .run(grading.total, grading.max, JSON.stringify(grading.serverBreakdown), inProgressId);
+                } else {
+                    db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+                        .run(socketUser.id, socketUser.unique_id, targetLab.id, grading.total, grading.max, JSON.stringify(grading.serverBreakdown), 'lab', 'completed');
+                }
+
+                if (process.env.RETAIN_PKA === 'true' || process.env.RETAIN_XML === 'true') {
+                    if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
+                    const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
+                    const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
+                    if (process.env.RETAIN_PKA === 'true' && fs.existsSync(task.tempFilePath)) {
+                        fs.copyFileSync(task.tempFilePath, path.join(capturesDir, `${baseName}.pka`));
+                        fs.copyFileSync(task.tempFilePath, path.join(capturesDir, `${baseName}.pkt`));
+                    }
+                    if (process.env.RETAIN_XML === 'true') fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
+                }
+
+                const payload = { 
+                    total: grading.total, max: grading.max, clientBreakdown: grading.clientBreakdown, show_score: grading.show_score
+                };
+
+                if (!grading.show_score) { delete payload.total; delete payload.max; }
+
+                socket.emit('result', payload);
+            } catch (e) {
+                socket.emit('err', "An internal processing error occurred.");
+            } finally {
+                db.releaseLock(lockKey); 
+                worker.terminate();
+                cleanupTempFile(task.tempFilePath);
+                activeWorkers--;
+                processWorkerQueue();
             }
-
-            if (process.env.RETAIN_PKA === 'true' || process.env.RETAIN_XML === 'true') {
-                if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
-                const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
-                const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
-                 if (process.env.RETAIN_PKA === 'true') {
-					fs.writeFileSync(path.join(capturesDir, `${baseName}.pka`), Buffer.from(workerData.fileData));
-					fs.writeFileSync(path.join(capturesDir, `${baseName}.pkt`), Buffer.from(workerData.fileData));
-				}
-                if (process.env.RETAIN_XML === 'true') fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
-            }
-
-            const payload = { 
-                total: grading.total, max: grading.max, clientBreakdown: grading.clientBreakdown, show_score: grading.show_score
-            };
-
-            if (!grading.show_score) { delete payload.total; delete payload.max; }
-
-            socket.emit('result', payload);
-            db.releaseLock(lockKey); 
-            worker.terminate();
-            activeWorkers--;
-            processWorkerQueue();
         } else if (msg.type === 'error') {
             clearTimeout(timeoutHandle);
             socket.emit('err', msg.msg);
             db.releaseLock(lockKey); 
             worker.terminate();
+            cleanupTempFile(task.tempFilePath);
             activeWorkers--;
             processWorkerQueue();
         }
@@ -180,6 +209,15 @@ function processWorkerQueue() {
         socket.emit('err', "An internal processing error occurred.");
         db.releaseLock(lockKey); 
         worker.terminate();
+        cleanupTempFile(task.tempFilePath);
+        activeWorkers--;
+        processWorkerQueue();
+    });
+
+    worker.on('exit', (code) => {
+        clearTimeout(timeoutHandle);
+        db.releaseLock(lockKey);
+        cleanupTempFile(task.tempFilePath);
         activeWorkers--;
         processWorkerQueue();
     });
@@ -284,7 +322,11 @@ io.on('connection', (socket) => {
             return socket.emit('err', "Invalid CSRF token. Please refresh the page.");
         }
 
-        const fileData = packet.fileData || packet;
+        const fileData = packet.fileData;
+        if (!fileData || (!Buffer.isBuffer(fileData) && typeof fileData !== 'string')) {
+            return socket.emit('err', "Invalid file format.");
+        }
+
         const cfg = getConfig();
         const labs = cfg.labs || [];
         const labId = packet.labId || (labs.length > 0 ? labs[0].id : null);
@@ -364,9 +406,16 @@ io.on('connection', (socket) => {
 
             const maxXmlMb = targetLab.max_xml_output_mb || 20;
 
+            // Stream file directly to a temporary path on disk to protect server RAM (VULN-B)
+            const os = require('os');
+            const tmpDir = os.tmpdir();
+            const tempFilePath = path.join(tmpDir, `csss_${crypto.randomBytes(16).toString('hex')}.tmp`);
+            fs.writeFileSync(tempFilePath, Buffer.from(fileData));
+
             workerQueue.push({ 
                 socket, 
-                workerData: { fileData, configData: getRawConfig(), labId, maxXmlMb }, 
+                workerData: { tempFilePath, configData: getRawConfig(), labId, maxXmlMb }, 
+                tempFilePath,
                 lockKey, socketUser, targetLab, inProgressId 
             });
             processWorkerQueue();

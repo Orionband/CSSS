@@ -10,7 +10,7 @@ let csrfToken = null;
 
 const quizView = document.getElementById('view-quiz');
 ['copy', 'paste', 'cut', 'contextmenu'].forEach(evt => {
-    quizView.addEventListener(evt, e => {
+    quizView?.addEventListener(evt, e => {
         e.preventDefault();
         return false;
     });
@@ -43,10 +43,10 @@ function applyBranding(options) {
     const full = options.app_title || 'CSSS ENGINE';
 
     const authTitle = document.getElementById('auth-title');
-    authTitle.textContent = full;
+    if (authTitle) authTitle.textContent = full;
 
     const navBrand = document.getElementById('nav-brand');
-    navBrand.textContent = full;
+    if (navBrand) navBrand.textContent = full;
 
     document.title = full;
 }
@@ -382,6 +382,11 @@ async function loadQuiz(id) {
     document.getElementById('quiz-title').innerText = data.title;
     document.getElementById('btn-submit-quiz').style.display = 'none';
     document.getElementById('quiz-timer').innerText = '';
+
+    if (data.session_active) {
+        startQuizSession();
+        return;
+    }
 
     let timeText = data.time_limit > 0 ? `${data.time_limit} Minutes` : "Unlimited";
     let attemptsText = data.max_attempts > 0 ? `${data.attempts_taken} / ${data.max_attempts}` : `${data.attempts_taken} (Unlimited)`;

@@ -20,11 +20,9 @@ if (!fs.existsSync(dbPath)) {
   process.exit(1);
 }
 
+// Backups have been disabled per instructions
 function backupDb() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = `${dbPath}.bak.${stamp}`;
-  fs.copyFileSync(dbPath, dest);
-  console.log(`Backup created: ${path.basename(dest)}`);
+  // No-op: Database backups are disabled.
 }
 
 const db = new Database(dbPath, { readonly: false });
@@ -78,15 +76,20 @@ function findUserByIdOrUsername(key) {
   }
 }
 
+function isValidIdentifier(name) {
+  return /^[A-Za-z0-9_]+$/.test(name);
+}
+
 // return array of { table, from, to, on_update, on_delete }
 function getReferencingForeignKeys() {
   const tables = listTables();
   const refs = [];
   for (const t of tables) {
+    if (!isValidIdentifier(t)) continue;
     try {
       const fks = db.prepare(`PRAGMA foreign_key_list("${t}")`).all();
       for (const fk of fks) {
-        if (fk.table === 'users') {
+        if (fk.table === 'users' && isValidIdentifier(fk.from)) {
           refs.push({
             table: t,
             from: fk.from,
@@ -143,7 +146,7 @@ async function deleteUser() {
   console.log('\nChoose action:');
   console.log('1) DELETE dependent rows in referencing tables, then DELETE user (recommended)');
   console.log('2) SET FK columns to NULL in referencing tables (only if those FK columns allow NULL), then DELETE user');
-  console.log('3) FORCE DELETE user by temporarily disabling foreign keys (not recommended a_" leaves orphans)');
+  console.log('3) FORCE DELETE user by temporarily disabling foreign keys (not recommended as leaves orphans)');
   console.log('4) Abort');
 
   const choice = await ask('Choose 1/2/3/4: ');
@@ -169,7 +172,7 @@ async function deleteUser() {
         const colInfo = cols.find(c => c.name === r.from);
         if (!colInfo) throw new Error(`Column ${r.from} not found on ${r.table}`);
         if (colInfo.notnull === 1) {
-          throw new Error(`Column ${r.table}.${r.from} is NOT NULL a_" cannot set to NULL automatically. Canceling.`);
+          throw new Error(`Column ${r.table}.${r.from} is NOT NULL as cannot set to NULL automatically. Canceling.`);
         }
       }
       for (const r of refs) {
