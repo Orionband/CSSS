@@ -42,12 +42,14 @@ function isWindowOpen(challenge) {
     
     if (challenge.comp_start) {
         const startTime = new Date(challenge.comp_start).getTime();
-        if (!isNaN(startTime) && now < startTime) return false;
+        if (isNaN(startTime)) return false;
+        if (now < startTime) return false;
     }
     
     if (challenge.comp_end) {
         const endTime = new Date(challenge.comp_end).getTime();
-        if (!isNaN(endTime) && now > endTime) return false;
+        if (isNaN(endTime)) return false;
+        if (now > endTime) return false;
     }
     
     return true;

@@ -57,8 +57,8 @@ function unwrapValue(val) {
 }
 
 function parseCiscoConfig(lines) {
-    if (!lines || lines.length === 0) return { global: [], blocks: {} };
-    const config = { global: [], blocks: {} };
+    if (!lines || lines.length === 0) return { global: [], blocks: Object.create(null) };
+    const config = { global: [], blocks: Object.create(null) };
     let currentBlock = null;
     lines.forEach(rawLine => {
         const line = typeof rawLine === 'string' ? rawLine : rawLine._;
