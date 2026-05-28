@@ -1,11 +1,11 @@
 const { getXmlValue } = require('./parser');
 const CryptMD5 = require('cryptmd5');
 const crypto = require('crypto');
-const RE2 = (() => { try { return require('re2'); } catch { return null; } })();
+// Hard dependency — optional fallback to native RegExp silently re-enables ReDoS
+const RE2 = require('re2');
 
 function safeRegex(pattern, flags) {
-    if (RE2) return new RE2(pattern, flags);
-    return new RegExp(pattern, flags);
+  return new RE2(pattern, flags);
 }
 
 function verifyType5(password, storedHash) {
@@ -112,7 +112,8 @@ function evaluateCondition(device, condition) {
         } else if (condition.mode === 'user') {
             // Looking for: username <user> [privilege X] secret 5 $1$salt$hash...
             const escapedUser = (condition.username || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const regex = new RegExp(`^username\\s+${escapedUser}\\s+.*secret\\s+5\\s+(\\$1\\$.+)$`, 'i');
+            // Use (?:\S+\s+)* instead of .* to avoid catastrophic backtracking on long non-matching lines
+            const regex = safeRegex(`^username\\s+${escapedUser}\\s+(?:\\S+\\s+)*secret\\s+5\\s+(\\$1\\$.+)$`, 'i');
             for (const line of targetLines) {
                 const match = line.match(regex);
                 if (match) {

@@ -1,5 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const path = require('path');
+const fs = require('fs');
 const db = require('../database');
 const { getConfig, isWindowOpen } = require('../config');
 const router = express.Router();
@@ -17,8 +19,10 @@ const DUMMY_HASH = bcrypt.hashSync('__dummy_timing_safe_value_never_matches__', 
 
 const registerLimiter = rateLimit({ windowMs: 24*60*60*1000, max: 10, standardHeaders: true, legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 5*60*1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const csrfLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
+const leaderboardLimiter = rateLimit({ windowMs: 10 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
 
-router.get('/csrf-token', (req, res) => {
+router.get('/csrf-token', csrfLimiter, (req, res) => {
     if (!req.session) return res.status(500).json({ error: "Session unavailable" });
     if (!req.session.csrfToken) {
         const crypto = require('crypto');
@@ -103,26 +107,31 @@ router.post('/logout', (req, res) => {
 });
 
 router.post('/login', loginLimiter, async (req, res) => {
-    const { username, password } = req.body;
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-    const hashToCompare = user ? user.password : DUMMY_HASH;
-    
-    const pwd = password !== undefined && password !== null ? String(password) : "";
-    const passwordMatch = await bcrypt.compare(pwd, hashToCompare);
+    try {
+        const { username, password } = req.body;
+        const userStr = String(username ?? "");
+        const user = db.prepare('SELECT * FROM users WHERE username = ?').get(userStr);
+        const hashToCompare = user ? user.password : DUMMY_HASH;
+        
+        const pwd = password !== undefined && password !== null ? String(password) : "";
+        const passwordMatch = await bcrypt.compare(pwd, hashToCompare);
 
-    if (!user || !passwordMatch) {
-        return res.status(401).json({ error: "Invalid credentials" });
-    }
+        if (!user || !passwordMatch) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
 
-    req.session.regenerate(err => {
-        if (err) return res.status(500).json({ error: "Login failed. Please try again." });
-        req.session.userId = user.id;
-        req.session.uniqueId = user.unique_id;
-        req.session.save((saveErr) => {
-            if (saveErr) return res.status(500).json({ error: "Session save failed." });
-            res.json({ success: true, unique_id: user.unique_id });
+        req.session.regenerate(err => {
+            if (err) return res.status(500).json({ error: "Login failed. Please try again." });
+            req.session.userId = user.id;
+            req.session.uniqueId = user.unique_id;
+            req.session.save((saveErr) => {
+                if (saveErr) return res.status(500).json({ error: "Session save failed." });
+                res.json({ success: true, unique_id: user.unique_id });
+            });
         });
-    });
+    } catch (err) {
+        res.status(500).json({ error: "Login failed. Please try again." });
+    }
 });
 
 router.get('/me', (req, res) => {
@@ -267,10 +276,20 @@ router.post('/lab/:id/start', (req, res) => {
 router.get('/lab/:id/download', (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).send("Unauthorized");
 
+    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.session.userId);
+    if (!user) {
+        req.session.destroy(() => {});
+        return res.status(401).send("Unauthorized");
+    }
+
     const cfg = getConfig();
     const lab = (cfg.labs || []).find(l => l.id === req.params.id);
     if (!lab) return res.status(404).send("Lab not found.");
     if (!lab.pka_file) return res.status(404).send("No PKA file configured for this lab.");
+
+    if (!isWindowOpen(lab)) {
+        return res.status(403).send("Forbidden: Competition window has closed.");
+    }
 
     const activeSession = db.prepare("SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1")
         .get(req.session.userId, lab.id);
@@ -289,24 +308,35 @@ router.get('/lab/:id/download', (req, res) => {
         }
     }
 
-    const path = require('path');
-    const fs = require('fs');
-
     const safeFilename = path.basename(lab.pka_file);
     if (/[/\\:\0]/.test(safeFilename) || safeFilename.startsWith('.')) {
         return res.status(400).send("Invalid file configuration.");
     }
 
-    const baseDir = path.resolve(path.join(__dirname, '../../protected/pka'));
-    const filePath = path.resolve(path.join(baseDir, safeFilename));
+    // Resolve baseDir canonically so the containment check compares real paths on both sides
+    let baseDir;
+    try {
+        baseDir = fs.realpathSync(path.join(__dirname, '../../protected/pka'));
+    } catch (e) {
+        return res.status(500).send("Server configuration error.");
+    }
+
+    // realpathSync follows all symlinks to the final target; throws if path doesn't exist.
+    // The containment check then compares two canonical paths, closing the symlink traversal gap.
+    let filePath;
+    try {
+        filePath = fs.realpathSync(path.join(baseDir, safeFilename));
+    } catch (e) {
+        return res.status(404).send("File not found.");
+    }
 
     if (!filePath.startsWith(baseDir + path.sep) && filePath !== baseDir) {
         return res.status(403).send("Forbidden.");
     }
 
     try {
-        const stats = fs.lstatSync(filePath);
-        if (stats.isSymbolicLink()) return res.status(403).send("Forbidden.");
+        // statSync (not lstatSync) — realpathSync already resolved any symlinks above
+        const stats = fs.statSync(filePath);
         if (!stats.isFile()) return res.status(404).send("File not found.");
     } catch (e) {
         return res.status(404).send("File not found.");
@@ -315,7 +345,7 @@ router.get('/lab/:id/download', (req, res) => {
     res.download(filePath, safeFilename);
 });
 
-router.get('/leaderboard', (req, res) => {
+router.get('/leaderboard', leaderboardLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
     if (process.env.SHOW_LEADERBOARD !== 'true') {
         return res.status(403).json({ error: "Leaderboard disabled" });
@@ -327,6 +357,21 @@ router.get('/leaderboard', (req, res) => {
     const allChallenges = [...labs, ...quizzes];
 
     const users = db.prepare('SELECT id, username, score_adjustment, withheld FROM users').all();
+
+    // Single query replaces N*M synchronous queries in nested loops
+    const allScores = db.prepare(`
+        SELECT user_id, lab_id, MAX(score) as max_score
+        FROM submissions
+        WHERE status = 'completed'
+        GROUP BY user_id, lab_id
+    `).all();
+
+    const scoreMap = {};
+    allScores.forEach(row => {
+        if (!scoreMap[row.user_id]) scoreMap[row.user_id] = {};
+        scoreMap[row.user_id][row.lab_id] = row.max_score;
+    });
+
     const leaderboard = [];
 
     users.forEach(u => {
@@ -343,8 +388,8 @@ router.get('/leaderboard', (req, res) => {
                 if (lCfg && lCfg.show_score === false) hideScore = true;
             }
 
-            const row = db.prepare("SELECT MAX(score) as s FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'completed'").get(u.id, ch.id);
-            const score = row && row.s !== null ? row.s : 0;
+            // O(1) map lookup instead of a DB query
+            const score = (scoreMap[u.id] && scoreMap[u.id][ch.id] != null) ? scoreMap[u.id][ch.id] : 0;
             
             if (hideScore) {
                 scores[ch.id] = '?'; 

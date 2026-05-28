@@ -3,6 +3,7 @@ const zlib = require('zlib');
 const toml = require('toml');
 const xml2js = require('xml2js');
 const fs = require('fs');
+const crypto = require('crypto');
 const { xor, cmac, decryptCTR } = require('./crypto');
 const { parseCiscoConfig } = require('./parser');
 const { evaluateCondition } = require('./grading');
@@ -21,10 +22,15 @@ const { evaluateCondition } = require('./grading');
         };
 
         let finalXML = "";
+        const limitMb = maxXmlMb || 20; 
+        const MAX_XML_OUTPUT = 1024 * 1024 * limitMb; 
         
         if (inputBuffer.subarray(0, 5).toString() === "<?xml") {
             report("Reading XML", 50);
             finalXML = inputBuffer.toString();
+            if (finalXML.length > MAX_XML_OUTPUT) {
+                throw new Error("Decompression failed or file too large.");
+            }
         } else {
             const key = Buffer.alloc(16, 137);
             const iv = Buffer.alloc(16, 16);
@@ -45,7 +51,8 @@ const { evaluateCondition } = require('./grading');
             const nTag = cmac(key, 0, iv);
             const hTag = cmac(key, 1, Buffer.alloc(0));
             const cTag = cmac(key, 2, ciphertext);
-            if (!xor(xor(nTag, hTag), cTag).equals(tag)) throw new Error("File Integrity Failed");
+            const computedTag = xor(xor(nTag, hTag), cTag);
+            if (computedTag.length !== tag.length || !crypto.timingSafeEqual(computedTag, tag)) throw new Error("File Integrity Failed");
             report("Decrypting", 45);
             let decrypted = decryptCTR(key, nTag, ciphertext);
 
@@ -56,8 +63,6 @@ const { evaluateCondition } = require('./grading');
 
             report("Decompressing", 65);
             
-            const limitMb = maxXmlMb || 20; 
-            const MAX_XML_OUTPUT = 1024 * 1024 * limitMb; 
             const zlibOptions = { maxOutputLength: MAX_XML_OUTPUT };
 
             try { 

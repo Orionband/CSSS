@@ -76,6 +76,7 @@ router.get('/asset/:type/:filename', (req, res) => {
     
     const cfg = getConfig();
     let isFileAllowed = false;
+    let allowingQuiz = null;
     const quizzes = cfg.quizzes || [];
     
     for (const q of quizzes) {
@@ -92,24 +93,42 @@ router.get('/asset/:type/:filename', (req, res) => {
         
         if (activeSession) {
             isFileAllowed = true;
+            allowingQuiz = q;
             break;
         }
     }
 
     if (!isFileAllowed) return res.status(403).send("Forbidden: No active quiz session for this asset.");
 
-    const baseDir = path.resolve(path.join(__dirname, '../../protected', type === 'image' ? 'images' : 'pka'));
-    const assetPath = path.resolve(path.join(baseDir, safeFilename));
+    // Window check applied after the full search, against the specific quiz that granted access
+    if (!isWindowOpen(allowingQuiz)) {
+        return res.status(403).send("Forbidden: Competition window has closed.");
+    }
+
+    // Resolve baseDir canonically so the containment check compares real paths on both sides
+    let baseDir;
+    try {
+        baseDir = fs.realpathSync(path.join(__dirname, '../../protected', type === 'image' ? 'images' : 'pka'));
+    } catch (e) {
+        return res.status(500).send("Server configuration error.");
+    }
+
+    // realpathSync follows all symlinks to the final target; throws if path doesn't exist.
+    // The containment check then compares two canonical paths, closing the symlink traversal gap.
+    let assetPath;
+    try {
+        assetPath = fs.realpathSync(path.join(baseDir, safeFilename));
+    } catch (e) {
+        return res.status(404).send("File not found.");
+    }
 
     if (!assetPath.startsWith(baseDir + path.sep) && assetPath !== baseDir) {
         return res.status(403).send("Forbidden.");
     }
 
     try {
-        const stats = fs.lstatSync(assetPath);
-        if (stats.isSymbolicLink()) {
-            return res.status(403).send("Forbidden.");
-        }
+        // statSync (not lstatSync) — realpathSync already resolved any symlinks above
+        const stats = fs.statSync(assetPath);
         if (!stats.isFile()) {
             return res.status(404).send("Not found.");
         }
@@ -128,6 +147,13 @@ router.get('/:id', (req, res) => {
     const quiz = (cfg.quizzes || []).find(q => q.id === req.params.id);
 
     if (!quiz) return res.status(404).json({ error: "Quiz not found." });
+
+    // Return minimal metadata before the window opens — enough for the UI to show
+    // the quiz exists, but without attempt counts or session details that are only
+    // relevant once the window is active or after it closes.
+    if (!isWindowOpen(quiz)) {
+        return res.json({ id: quiz.id, title: quiz.title, window_open: false });
+    }
 
     let attemptsTaken = 0;
     try {

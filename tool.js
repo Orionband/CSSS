@@ -25,6 +25,15 @@ function backupDb() {
   // No-op: Database backups are disabled.
 }
 
+function invalidateUserSessions(userId) {
+  try {
+    const result = db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(userId);
+    console.log(`Invalidated ${result.changes} session(s) for user id=${userId}.`);
+  } catch (e) {
+    console.warn('Warning: Could not invalidate sessions:', e.message);
+  }
+}
+
 const db = new Database(dbPath, { readonly: false });
 console.log('Opened grader.db');
 
@@ -126,6 +135,7 @@ async function deleteUser() {
     try {
       const info = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
       console.log(`Deleted. Rows affected: ${info.changes}`);
+      invalidateUserSessions(user.id);
     } catch (err) {
       console.error('Error deleting user:', err.message);
     }
@@ -183,18 +193,22 @@ async function deleteUser() {
       console.log(`Deleted user rows: ${infoUser.changes}`);
     } else if (actionChoice === '3') {
       db.exec('PRAGMA foreign_keys = OFF;');
-      for (const r of refs) {
-        const cnt = db.prepare(`SELECT COUNT(1) AS c FROM "${r.table}" WHERE "${r.from}" = ?`).get(user.id).c;
-        console.log(`(force) ${cnt} dependent row(s) exist in ${r.table}`);
+      try {
+        for (const r of refs) {
+          const cnt = db.prepare(`SELECT COUNT(1) AS c FROM "${r.table}" WHERE "${r.from}" = ?`).get(user.id).c;
+          console.log(`(force) ${cnt} dependent row(s) exist in ${r.table}`);
+        }
+        const infoUser = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+        console.log(`Deleted user rows (force): ${infoUser.changes}`);
+      } finally {
+        db.exec('PRAGMA foreign_keys = ON;');
       }
-      const infoUser = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
-      console.log(`Deleted user rows (force): ${infoUser.changes}`);
-      db.exec('PRAGMA foreign_keys = ON;');
     }
   });
 
   try {
     tx(choice);
+    invalidateUserSessions(user.id);
     console.log('Operation completed.');
   } catch (err) {
     console.error('Operation failed:', err.message);
@@ -229,6 +243,7 @@ async function resetPassword() {
   backupDb();
   const info = db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, user.id);
   console.log(`Password updated. Rows affected: ${info.changes}`);
+  invalidateUserSessions(user.id);
 }
 
 async function wipeSubmissions() {

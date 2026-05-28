@@ -4,6 +4,7 @@ const db = new Database('grader.db');
 // Enable Write-Ahead Logging to prevent database locking on concurrent writes
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
+db.pragma('foreign_keys = ON');
 
 db.prepare(`
     CREATE TABLE IF NOT EXISTS users (
