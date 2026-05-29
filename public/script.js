@@ -7,6 +7,7 @@ let quizTimerInterval = null;
 let labTimerInterval = null;
 let quizMetadataCache = null; 
 let csrfToken = null;
+let tabSwitchNonce = 0;
 
 const quizView = document.getElementById('view-quiz');
 ['copy', 'paste', 'cut', 'contextmenu'].forEach(evt => {
@@ -51,6 +52,20 @@ function applyBranding(options) {
     document.title = full;
 }
 
+function showPrimaryView(view) {
+    document.getElementById('auth-view')?.classList.toggle('hidden', view !== 'auth');
+    document.getElementById('app-view')?.classList.toggle('hidden', view !== 'app');
+}
+
+async function hydrateConfig(data) {
+    availableChallenges = data.challenges || [];
+
+    if (data.options) applyBranding(data.options);
+
+    renderNav(data.options || {});
+    if (availableChallenges.length > 0) await switchTab(availableChallenges[0].id);
+}
+
 // SAFE ESCAPE TO PREVENT HTML INJECTION & XSS
 function escapeHtml(str) {
     if (str === null || str === undefined) return '';
@@ -67,7 +82,7 @@ async function login() {
     const pass = document.getElementById('l-pass').value;
     const res = await securePost('/api/login', { username: user, password: pass });
     const data = await res.json();
-    if(data.success) initApp(data.unique_id);
+    if(data.success) await initApp(data.unique_id);
     else document.getElementById('auth-error').innerText = data.error;
 }
 
@@ -77,7 +92,7 @@ async function register() {
     const pass = document.getElementById('r-pass').value;
     const res = await securePost('/api/register', { username: user, email: email, password: pass });
     const data = await res.json();
-    if(data.success) initApp(data.unique_id);
+    if(data.success) await initApp(data.unique_id);
     else document.getElementById('auth-error').innerText = data.error;
 }
 
@@ -87,11 +102,8 @@ async function logout() {
     location.reload();
 }
 
-function initApp(uid) {
+async function initApp(uid, bootstrap = {}) {
     currentUser = uid;
-    document.getElementById('loading-view').classList.add('hidden');
-    document.getElementById('auth-view').classList.add('hidden');
-    document.getElementById('app-view').classList.remove('hidden');
     document.getElementById('uid-display').innerText = uid;
     
     socket.disconnect(); 
@@ -101,7 +113,15 @@ function initApp(uid) {
         socket.emit('authenticate', uid);
     });
 
-    fetchCsrfToken().then(() => fetchConfig());
+    if (!bootstrap.skipCsrfFetch) {
+        await fetchCsrfToken();
+    }
+    if (bootstrap.configData) {
+        await hydrateConfig(bootstrap.configData);
+    } else {
+        await fetchConfig();
+    }
+    showPrimaryView('app');
 
     // Keep-alive ping to prevent Render/Koyeb from sleeping while app is in use
     setInterval(() => {
@@ -109,7 +129,7 @@ function initApp(uid) {
     }, 20000);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('btn-login-submit')?.addEventListener('click', login);
     document.getElementById('btn-register-submit')?.addEventListener('click', register);
     document.getElementById('link-show-register')?.addEventListener('click', () => toggleAuth('register'));
@@ -136,40 +156,33 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('tab-admin-users').classList.remove('active');
     });
 
-    fetchCsrfToken().then(() => {
-        fetch('/api/me')
-            .then(r => r.json())
-            .then(data => {
-                if(data.unique_id) {
-                    if(data.is_admin) window.isAdmin = true;
-                    initApp(data.unique_id);
-                } else {
-                    document.getElementById('loading-view').classList.add('hidden');
-                    document.getElementById('auth-view').classList.remove('hidden');
-                    fetch('/api/config').then(r => r.json()).then(d => {
-                        if (d.options) applyBranding(d.options);
-                    }).catch(() => {});
-                }
-            })
-            .catch(() => {
-                document.getElementById('loading-view').classList.add('hidden');
-                document.getElementById('auth-view').classList.remove('hidden');
-                fetch('/api/config').then(r => r.json()).then(d => {
-                    if (d.options) applyBranding(d.options);
-                }).catch(() => {});
-            });
-    });
+    try {
+        await fetchCsrfToken();
+        const [meRes, cfgRes] = await Promise.all([fetch('/api/me'), fetch('/api/config')]);
+        const meData = await meRes.json();
+        const cfgData = await cfgRes.json();
+
+        if (meData.unique_id) {
+            if (meData.is_admin) window.isAdmin = true;
+            await initApp(meData.unique_id, { configData: cfgData, skipCsrfFetch: true });
+            return;
+        }
+
+        if (cfgData.options) applyBranding(cfgData.options);
+        showPrimaryView('auth');
+    } catch (e) {
+        try {
+            const d = await fetch('/api/config').then(r => r.json());
+            if (d.options) applyBranding(d.options);
+        } catch (_) {}
+        showPrimaryView('auth');
+    }
 });
 
 async function fetchConfig() {
     const res = await fetch('/api/config');
     const data = await res.json();
-    availableChallenges = data.challenges;
-    
-    if (data.options) applyBranding(data.options);
-    
-    renderNav(data.options);
-    if(availableChallenges.length > 0) switchTab(availableChallenges[0].id);
+    await hydrateConfig(data);
 }
 
 function renderNav(options) {
@@ -214,13 +227,9 @@ function renderNav(options) {
     }
 }
 
-function switchTab(id) {
-    document.getElementById('view-grader').classList.add('hidden');
-    document.getElementById('view-quiz').classList.add('hidden');
-    document.getElementById('view-history').classList.add('hidden');
-    document.getElementById('view-leaderboard').classList.add('hidden');
-    document.getElementById('view-admin').classList.add('hidden');
-    
+async function switchTab(id) {
+    const switchToken = ++tabSwitchNonce;
+
     if (quizTimerInterval) clearInterval(quizTimerInterval);
     if (labTimerInterval) clearInterval(labTimerInterval);
 
@@ -228,47 +237,56 @@ function switchTab(id) {
     const activeNav = document.getElementById('nav-' + id);
     if(activeNav) activeNav.classList.add('active');
 
+    let targetViewId = null;
+
     if(id === 'history') {
-        document.getElementById('view-history').classList.remove('hidden');
-        loadHistory();
+        await loadHistory();
+        targetViewId = 'view-history';
     } else if(id === 'leaderboard') {
-        document.getElementById('view-leaderboard').classList.remove('hidden');
-        loadLeaderboard();
+        await loadLeaderboard();
+        targetViewId = 'view-leaderboard';
     } else if(id === 'admin') {
-        document.getElementById('view-admin').classList.remove('hidden');
-        loadAdminPanel();
+        await loadAdminPanel();
+        targetViewId = 'view-admin';
     } else {
-        currentChallengeId = id;
         const challenge = availableChallenges.find(c => c.id === id);
         if(challenge) {
+            currentChallengeId = id;
             currentChallengeType = challenge.type;
             if (challenge.type === 'lab') {
-                document.getElementById('view-grader').classList.remove('hidden');
-                loadLabInfo(id);
+                await loadLabInfo(id);
+                targetViewId = 'view-grader';
             } else if (challenge.type === 'quiz') {
-                document.getElementById('view-quiz').classList.remove('hidden');
-                loadQuiz(id);
+                await loadQuiz(id);
+                targetViewId = 'view-quiz';
             }
         }
+    }
+
+    // Ignore stale tab results if user clicked a newer tab while this one was loading.
+    if (switchToken !== tabSwitchNonce) return;
+
+    const allViews = ['view-grader', 'view-quiz', 'view-history', 'view-leaderboard', 'view-admin'];
+    allViews.forEach(viewId => document.getElementById(viewId).classList.add('hidden'));
+    if (targetViewId) {
+        document.getElementById(targetViewId).classList.remove('hidden');
     }
 }
 
 // ===================== LAB START FLOW =====================
 
 async function loadLabInfo(id) {
-    document.getElementById('lab-start-screen').classList.remove('hidden');
-    document.getElementById('lab-active-screen').classList.add('hidden');
-    document.getElementById('report').classList.add('hidden');
     document.getElementById('progress-container').style.display = 'none';
     document.getElementById('status').innerText = '';
 
     const infoArea = document.getElementById('lab-info-area');
-    infoArea.innerHTML = "<div style='text-align:center; padding:20px'>Loading...</div>";
-
     const res = await fetch(`/api/lab/${id}`);
     const data = await res.json();
 
     if (data.error) {
+        document.getElementById('lab-start-screen').classList.remove('hidden');
+        document.getElementById('lab-active-screen').classList.add('hidden');
+        document.getElementById('report').classList.add('hidden');
         infoArea.innerHTML = `<div class="error-msg">${escapeHtml(data.error)}</div>`;
         return;
     }
@@ -283,6 +301,10 @@ async function loadLabInfo(id) {
         showLabActive(id, data);
         return;
     }
+
+    document.getElementById('lab-start-screen').classList.remove('hidden');
+    document.getElementById('lab-active-screen').classList.add('hidden');
+    document.getElementById('report').classList.add('hidden');
 
     infoArea.innerHTML = `
         <div class="quiz-start-screen">
@@ -366,8 +388,7 @@ function showLabActive(id, data) {
 async function loadQuiz(id) {
     document.getElementById('quiz-result').classList.add('hidden');
     const area = document.getElementById('quiz-questions-area');
-    area.innerHTML = "<div style='text-align:center; padding:20px'>Loading Info...</div>";
-    
+
     const res = await fetch(`/api/quiz/${id}`);
     const data = await res.json();
     
@@ -384,7 +405,7 @@ async function loadQuiz(id) {
     document.getElementById('quiz-timer').innerText = '';
 
     if (data.session_active) {
-        startQuizSession();
+        await startQuizSession();
         return;
     }
 
@@ -409,7 +430,6 @@ async function startQuizSession() {
     if(!currentChallengeId) return;
     
     const area = document.getElementById('quiz-questions-area');
-    area.innerHTML = "Fetching questions...";
 
     const res = await securePost(`/api/quiz/${currentChallengeId}/start`, {});
     const data = await res.json();
@@ -881,8 +901,6 @@ socket.on('err', (msg) => {
 async function loadAdminPanel() {
     const usersBody = document.getElementById('admin-users-body');
     const lbBody = document.getElementById('admin-lb-body');
-    usersBody.innerHTML = '<tr><td colspan="4" style="text-align:center">Loading...</td></tr>';
-    lbBody.innerHTML = '<tr><td colspan="6" style="text-align:center">Loading...</td></tr>';
     
     const res = await fetch('/api/admin/users');
     if (!res.ok) {
@@ -1085,37 +1103,34 @@ async function adminDeleteUser(id, username) {
 }
 
 async function adminViewSubmissions(userId, username) {
-    showModal(`<h2 style="color:var(--accent); margin-bottom:15px;">Submissions: ${escapeHtml(username)}</h2><div id="admin-sub-list">Loading...</div>`);
-    
     const res = await fetch(`/api/admin/users/${userId}/submissions`);
     const data = await res.json();
-    
+
+    let listHtml;
     if (data.error) {
-        document.getElementById('admin-sub-list').innerText = data.error;
-        return;
+        listHtml = escapeHtml(data.error);
+    } else if (data.submissions.length === 0) {
+        listHtml = "<div style='color:#888'>No submissions found.</div>";
+    } else {
+        let tableHtml = `<div style="max-height: 400px; overflow-y: auto;"><table class="admin-table"><thead><tr><th>ID</th><th>Lab ID</th><th>Type</th><th>Score</th><th>Date</th><th>Actions</th></tr></thead><tbody>`;
+        data.submissions.forEach(s => {
+            const dateStr = new Date(s.timestamp).toLocaleString();
+            tableHtml += `
+                <tr>
+                    <td>${s.id}</td>
+                    <td>${escapeHtml(s.lab_id)}</td>
+                    <td>${escapeHtml(s.type)}</td>
+                    <td>${s.score}/${s.max_score}</td>
+                    <td>${dateStr}</td>
+                    <td><button class="btn-small btn-danger btn-admin-del-sub" data-subid="${s.id}" data-userid="${userId}" data-username="${escapeHtml(username)}">Delete</button></td>
+                </tr>
+            `;
+        });
+        tableHtml += `</tbody></table></div>`;
+        listHtml = tableHtml;
     }
-    
-    if (data.submissions.length === 0) {
-        document.getElementById('admin-sub-list').innerHTML = "<div style='color:#888'>No submissions found.</div>";
-        return;
-    }
-    
-    let html = `<div style="max-height: 400px; overflow-y: auto;"><table class="admin-table"><thead><tr><th>ID</th><th>Lab ID</th><th>Type</th><th>Score</th><th>Date</th><th>Actions</th></tr></thead><tbody>`;
-    data.submissions.forEach(s => {
-        const dateStr = new Date(s.timestamp).toLocaleString();
-        html += `
-            <tr>
-                <td>${s.id}</td>
-                <td>${escapeHtml(s.lab_id)}</td>
-                <td>${escapeHtml(s.type)}</td>
-                <td>${s.score}/${s.max_score}</td>
-                <td>${dateStr}</td>
-                <td><button class="btn-small btn-danger btn-admin-del-sub" data-subid="${s.id}" data-userid="${userId}" data-username="${escapeHtml(username)}">Delete</button></td>
-            </tr>
-        `;
-    });
-    html += `</tbody></table></div>`;
-    document.getElementById('admin-sub-list').innerHTML = html;
+
+    showModal(`<h2 style="color:var(--accent); margin-bottom:15px;">Submissions: ${escapeHtml(username)}</h2><div id="admin-sub-list">${listHtml}</div>`);
 
     document.querySelectorAll('.btn-admin-del-sub').forEach(btn => {
         btn.addEventListener('click', (e) => adminDeleteSubmission(e.target.dataset.subid, e.target.dataset.userid, e.target.dataset.username));

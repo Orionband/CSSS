@@ -13,16 +13,7 @@ const adminLimiter = rateLimit({
  message: { error: "Too many admin requests. Please try again later." }
 });
 
-const adminAuditLog = (req, res, next) => {
- const userId = req.session && req.session.userId;
- const method = req.method;
- const path = req.path;
- console.log(`[ADMIN AUDIT] user_id=${userId} method=${method} path=${path} ip=${req.ip}`);
- next();
-};
-
 router.use(adminLimiter);
-router.use(adminAuditLog);
 
 function generateUniqueId() {
    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
