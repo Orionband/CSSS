@@ -408,6 +408,9 @@ router.get('/leaderboard', leaderboardLimiter, (req, res) => {
         if (total < 0) total = 0;
 
         if (total > 0 || Object.values(scores).some(s => s === '?')) {
+            if (u.withheld) {
+                Object.keys(scores).forEach(k => scores[k] = 'W');
+            }
             leaderboard.push({ 
                 username: u.username, 
                 scores: scores, 

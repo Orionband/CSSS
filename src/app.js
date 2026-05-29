@@ -1,6 +1,12 @@
 const dotenv = require('dotenv');
 dotenv.config();
 
+if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+    console.error('FATAL: SESSION_SECRET is missing or too short (minimum 32 characters). Refusing to start.');
+    console.error('Run `node quickstart.js` to generate a .env file with a secure SESSION_SECRET.');
+    process.exit(1);
+}
+
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
