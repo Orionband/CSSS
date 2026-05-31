@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiz</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <div id="modal-container" class="modal hidden">
+        <div class="modal-content" id="modal-box">
+            <span class="modal-close" id="modal-close-btn">&times;</span>
+            <div id="modal-inner"></div>
+        </div>
+    </div>
+
+    <nav class="navBar">
+        <a href="/challenges.html" class="nav-brand navElement" id="nav-brand"></a>
+        <div class="nav-links-row" id="nav-links-container"></div>
+        <div class="nav-user navElement">
+            <span id="uid-display"></span>
+            <button type="button" class="logout-btn" id="btn-logout">Logout</button>
+        </div>
+    </nav>
+    <script src="/js/branding-init.js"></script>
+
+    <main class="main-content">
+        <div class="content-wrap">
+            <div class="page-top">
+                <a href="/challenges.html" class="btn-ghost">&larr; Back to Challenges</a>
+                <h2 id="quiz-title">Quiz</h2>
+            </div>
+
+            <div id="quiz-loading" class="page-loading">Loading quiz&hellip;</div>
+
+            <section id="quiz-start-screen" class="componentContainer challenge-intro hidden">
+                <ul class="info-list">
+                    <li><span class="info-label">Time Limit</span><span id="quiz-stat-time"></span></li>
+                    <li><span class="info-label">Attempts</span><span id="quiz-stat-attempts"></span></li>
+                    <li><span class="info-label">Questions</span><span id="quiz-stat-questions"></span></li>
+                </ul>
+                <div id="quiz-info-error" class="error-msg hidden"></div>
+                <button type="button" id="btn-start-quiz" class="intro-action">Start Quiz</button>
+            </section>
+
+            <section id="quiz-active-screen" class="componentContainer hidden">
+                <div class="panel-header">
+                    <h2 id="quiz-active-title">Quiz</h2>
+                    <div class="panel-header-actions">
+                        <div id="quiz-timer" class="quiz-timer"></div>
+                    </div>
+                </div>
+                <div id="quiz-questions-area"></div>
+                <button type="button" id="btn-submit-quiz" class="btn-block">Submit Answers &gt;&gt;</button>
+            </section>
+
+            <section id="quiz-result" class="componentContainer hidden">
+                <h2 style="color:var(--accent)">Quiz Results</h2>
+                <div id="quiz-score-display" class="score-display" style="margin-bottom:20px"></div>
+                <div id="quiz-feedback-list"></div>
+            </section>
+        </div>
+    </main>
+
+    <script type="module" src="js/page-quiz.js"></script>
+</body>
+</html>

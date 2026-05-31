@@ -62,8 +62,11 @@ catch (e) { db.prepare("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0"
 try { db.prepare('SELECT score_adjustment FROM users LIMIT 1').get(); } 
 catch (e) { db.prepare("ALTER TABLE users ADD COLUMN score_adjustment INTEGER DEFAULT 0").run(); }
 
-try { db.prepare('SELECT withheld FROM users LIMIT 1').get(); } 
+try { db.prepare('SELECT withheld FROM users LIMIT 1').get(); }
 catch (e) { db.prepare("ALTER TABLE users ADD COLUMN withheld INTEGER DEFAULT 0").run(); }
+
+try { db.prepare('SELECT password_changed_at FROM users LIMIT 1').get(); }
+catch (e) { db.prepare("ALTER TABLE users ADD COLUMN password_changed_at INTEGER").run(); }
 
 db.acquireLock = function(key) {
     try {

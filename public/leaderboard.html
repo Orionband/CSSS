@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <nav class="navBar">
+        <a href="/challenges.html" class="nav-brand navElement" id="nav-brand"></a>
+        <div class="nav-links-row" id="nav-links-container"></div>
+        <div class="nav-user navElement">
+            <span id="uid-display"></span>
+            <button type="button" class="logout-btn" id="btn-logout">Logout</button>
+        </div>
+    </nav>
+    <script src="/js/branding-init.js"></script>
+
+    <main class="main-content">
+        <div class="content-wrap">
+            <div class="page-header">
+                <h2>Leaderboard</h2>
+                <small>Top Players</small>
+            </div>
+            <div class="componentContainer table-scroll">
+                <table id="lb-table">
+                    <thead><tr></tr></thead>
+                    <tbody id="lb-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="js/page-leaderboard.js"></script>
+</body>
+</html>

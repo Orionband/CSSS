@@ -1,4 +1,4 @@
-﻿# CSSS Documentation
+# CSSS Documentation
 
 ## Why?
 - The main purpose is to prevent cheating, whether that be through patching packet tracer or any other means. If there are any vulns you would like to report pls dm me at ``a_person9852`` on discord.
@@ -16,7 +16,7 @@
 1.  `npm install`
 2.  `node quickstart.js` (setup environment)
 3.  `npm start`
-4.  Access at `http://localhost:3000`
+4.  Access at `http://localhost:10000`
 
 ---
 
@@ -65,7 +65,7 @@ pka_file = "lab1_starter.pka"
 ```
 
 - `show_score`, `show_check_messages`, `show_missed_points`: Configures student feedback after submission.
-- `comp_start` and `comp_end`: Configures the global competition window in UTC. If omitted/unset, the lab is always open.
+- `comp_start` and `comp_end`: Configures the global competition window in UTC. Format:Format: YYYY-MM-DDTHH:MM:SSZ. If omitted/unset, the lab is always open.
 - `time_limit_minutes`: Enforces a strict server-side deadline once the student clicks "Start Lab".
 - `pka_file`: The filename of the starting file (must be in `protected/pka/`).
 - `max_submissions`: The maximum times a student can submit.

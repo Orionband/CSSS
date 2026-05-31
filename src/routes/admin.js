@@ -22,6 +22,12 @@ function generateUniqueId() {
    return id.match(/.{1,4}/g).join('-');
 }
 
+function parseStrictAdminFlag(value) {
+   if (value === true || value === 1) return 1;
+   if (value === false || value === 0 || value === null || value === undefined) return 0;
+   return null;
+}
+
 const adminOnly = (req, res, next) => {
    if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
@@ -54,10 +60,14 @@ router.post('/users', async (req, res) => {
        return res.status(400).json({ error: "Password must be >= 8 chars, contain an uppercase letter and a number." });
    }
 
+   const adminFlag = parseStrictAdminFlag(is_admin);
+   if (adminFlag === null) {
+       return res.status(400).json({ error: "is_admin must be a boolean." });
+   }
+
    try {
        const hashedPassword = await bcrypt.hash(pwd, 10);
        const uid = generateUniqueId();
-       const adminFlag = is_admin ? 1 : 0;
 
        const info = db.prepare('INSERT INTO users (username, email, password, unique_id, is_admin) VALUES (?, ?, ?, ?, ?)')
            .run(String(username), email ? String(email) : null, hashedPassword, uid, adminFlag);
@@ -84,7 +94,6 @@ router.delete('/users/:id', (req, res) => {
            userSockets.forEach(s => s.disconnect(true));
        }
 
-       // Destroy HTTP sessions for deleted user (VULN-C fixed)
        try {
            db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(targetId);
        } catch (e) {}
@@ -114,8 +123,14 @@ router.post('/users/:id/password', async (req, res) => {
            userSockets.forEach(s => s.disconnect(true));
        }
        try {
-           db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(targetId);
-       } catch (e) {}
+           const result = db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(targetId);
+           console.log(`Admin password reset: Invalidated ${result.changes} session(s) for user id=${targetId}.`);
+       } catch (e) {
+           console.error(`CRITICAL: Failed to invalidate sessions for user id=${targetId} after password reset:`, e.message);
+           // Don't fail the request, but alert the admin that sessions may persist
+       }
+       // Set a timestamp so the auth middleware can invalidate stale sessions
+       db.prepare('UPDATE users SET password_changed_at = ? WHERE id = ?').run(Date.now(), targetId);
 
        res.json({ success: true });
    } catch (e) {
@@ -128,7 +143,10 @@ router.post('/users/:id/score', (req, res) => {
    const { adjustment, withheld } = req.body;
    
    const adjInt = parseInt(adjustment) || 0;
-   const withheldInt = withheld ? 1 : 0;
+   const withheldInt = parseStrictAdminFlag(withheld);
+   if (withheldInt === null) {
+       return res.status(400).json({ error: "withheld must be a boolean." });
+   }
 
    try {
        db.prepare('UPDATE users SET score_adjustment = ?, withheld = ? WHERE id = ?').run(adjInt, withheldInt, targetId);
