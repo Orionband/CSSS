@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const db = require('../database');
@@ -24,13 +25,17 @@ const leaderboardLimiter = rateLimit({ windowMs: 10 * 1000, max: 5, standardHead
 const labStartLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 const downloadLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 
-router.get('/csrf-token', csrfLimiter, (req, res) => {
-    if (!req.session) return res.status(500).json({ error: "Session unavailable" });
+function ensureCsrfToken(req) {
+    if (!req.session) return null;
     if (!req.session.csrfToken) {
-        const crypto = require('crypto');
         req.session.csrfToken = crypto.randomBytes(32).toString('hex');
     }
-    res.json({ csrfToken: req.session.csrfToken });
+    return req.session.csrfToken;
+}
+
+router.get('/csrf-token', csrfLimiter, (req, res) => {
+    if (!req.session) return res.status(500).json({ error: "Session unavailable" });
+    res.json({ csrfToken: ensureCsrfToken(req) });
 });
 
 router.post('/register', registerLimiter, async (req, res) => {
@@ -84,9 +89,10 @@ router.post('/register', registerLimiter, async (req, res) => {
             req.session.userId = info.lastInsertRowid;
             req.session.uniqueId = uid;
             req.session.authenticatedAt = Date.now();
+            req.session.csrfToken = crypto.randomBytes(32).toString('hex');
             req.session.save((saveErr) => {
                 if (saveErr) return res.status(500).json({ error: "Session save failed." });
-                res.json({ success: true, unique_id: uid });
+                res.json({ success: true, unique_id: uid, csrfToken: req.session.csrfToken });
             });
         });
     } catch (err) {
@@ -130,9 +136,10 @@ router.post('/login', loginLimiter, async (req, res) => {
             req.session.userId = user.id;
             req.session.uniqueId = user.unique_id;
             req.session.authenticatedAt = Date.now();
+            req.session.csrfToken = crypto.randomBytes(32).toString('hex');
             req.session.save((saveErr) => {
                 if (saveErr) return res.status(500).json({ error: "Session save failed." });
-                res.json({ success: true, unique_id: user.unique_id });
+                res.json({ success: true, unique_id: user.unique_id, csrfToken: req.session.csrfToken });
             });
         });
     } catch (err) {
@@ -213,7 +220,7 @@ router.get('/bootstrap', (req, res) => {
             unique_id: req.session.uniqueId,
             is_admin: user && user.is_admin === 1,
         },
-        csrfToken: req.session.csrfToken,
+        csrfToken: ensureCsrfToken(req),
         challenges: buildChallengeList(cfg),
         options: appOptions(),
     });

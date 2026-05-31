@@ -51,6 +51,8 @@ const askBool = async (query) => {
     replaceOrAdd('SHOW_LEADERBOARD', showLeaderboard);
     replaceOrAdd('SHOW_HISTORY', showHistory);
     replaceOrAdd('ALLOW_REGISTRATION', allowRegistration);
+    replaceOrAdd('BIND_HOST', '127.0.0.1');
+    replaceOrAdd('DEFAULT_MAX_UPLOAD_MB', '50');
 
     envContent = envContent.replace(/^MAX_UPLOAD_MB=.*\n?/gm, '');
     envContent = envContent.replace(/^MAX_XML_OUTPUT_MB=.*\n?/gm, '');

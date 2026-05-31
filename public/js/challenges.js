@@ -94,7 +94,7 @@ function renderGrid(container, challenges, kind) {
 
     challenges.forEach(ch => {
 
-        const page = ch.type === 'lab' ? 'lab.html' : 'quiz.html';
+        const page = ch.type === 'lab' ? '/lab' : '/quiz';
 
         const points = ch.points ?? 0;
 

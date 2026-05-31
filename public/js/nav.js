@@ -1,10 +1,10 @@
 import { state } from './state.js';
 
 const NAV_ITEMS = [
-    { page: 'challenges', href: '/challenges.html', label: 'Challenges', visible: () => state.availableChallenges.length > 0 },
-    { page: 'leaderboard', href: '/leaderboard.html', label: 'Leaderboard', visible: (o) => o.show_leaderboard },
-    { page: 'history', href: '/history.html', label: 'History', visible: (o) => o.show_history },
-    { page: 'admin', href: '/admin.html', label: 'Admin', visible: () => window.isAdmin, admin: true },
+    { page: 'challenges', href: '/challenges', label: 'Challenges', visible: () => state.availableChallenges.length > 0 },
+    { page: 'leaderboard', href: '/leaderboard', label: 'Leaderboard', visible: (o) => o.show_leaderboard },
+    { page: 'history', href: '/history', label: 'History', visible: (o) => o.show_history },
+    { page: 'admin', href: '/admin', label: 'Admin', visible: () => window.isAdmin, admin: true },
 ];
 
 export function renderNav(options, activePage) {

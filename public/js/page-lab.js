@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const id = new URLSearchParams(location.search).get('id');
     if (!id) {
-        location.href = '/challenges.html';
+        location.href = '/challenges';
         return;
     }
 

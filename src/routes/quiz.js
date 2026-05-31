@@ -5,7 +5,16 @@ const express = require('express');
  const db = require('../database');
  const { getConfig, isWindowOpen } = require('../config');
  const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
+
+const quizSubmitLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many quiz submissions. Please wait before trying again." },
+});
 
 function safeObject() {
     return Object.create(null);
@@ -23,6 +32,12 @@ function shuffle(array) {
 
 function parseDbTime(dbTimestamp) {
     return new Date(dbTimestamp.replace(' ', 'T') + 'Z').getTime();
+}
+
+/** RE2 flags for text questions: default case-insensitive; set regex_flags in quiz config (e.g. "" or "m"). */
+function quizTextRegexFlags(q) {
+    if (q.regex_flags === undefined || q.regex_flags === null) return 'i';
+    return String(q.regex_flags).replace(/[^im]/g, '');
 }
 
 setInterval(() => {
@@ -271,7 +286,7 @@ router.post('/:id/start', (req, res) => {
         res.json({ questions: safeQuestions, time_remaining_seconds: timeRemaining });
 });
 
-router.post('/:id/submit', (req, res) => {
+router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
     const cfg = getConfig();
@@ -343,7 +358,7 @@ router.post('/:id/submit', (req, res) => {
                 if (typeof input === 'string' && input.trim() !== '') {
                     const sanitizedInput = input.trim().substring(0, 200);
                     try {
-                        const re = new RE2(q.regex, 'i'); // Safe against ReDoS
+                        const re = new RE2(q.regex, quizTextRegexFlags(q));
                         if (re.test(sanitizedInput)) isCorrect = true;
                     } catch (e) {} 
                 }

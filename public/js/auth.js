@@ -12,7 +12,11 @@ export async function login() {
     const pass = document.getElementById('l-pass').value;
     const res = await securePost('/api/login', { username: user, password: pass });
     const data = await res.json();
-    if (data.success) location.href = '/challenges.html';
+    if (data.success) {
+        if (data.csrfToken) state.csrfToken = data.csrfToken;
+        clearBootstrapCache();
+        location.href = '/challenges';
+    }
     else document.getElementById('auth-error').innerText = data.error;
 }
 
@@ -22,7 +26,11 @@ export async function register() {
     const pass = document.getElementById('r-pass').value;
     const res = await securePost('/api/register', { username: user, email, password: pass });
     const data = await res.json();
-    if (data.success) location.href = '/challenges.html';
+    if (data.success) {
+        if (data.csrfToken) state.csrfToken = data.csrfToken;
+        clearBootstrapCache();
+        location.href = '/challenges';
+    }
     else document.getElementById('auth-error').innerText = data.error;
 }
 
@@ -34,7 +42,7 @@ export async function logout() {
     await securePost('/api/logout');
     state.csrfToken = null;
     clearBootstrapCache();
-    location.href = '/index.html';
+    location.href = '/';
 }
 
 export async function bootstrapAuthPage() {
@@ -45,7 +53,7 @@ export async function bootstrapAuthPage() {
         const cfgData = await cfgRes.json();
 
         if (meData.unique_id) {
-            location.href = '/challenges.html';
+            location.href = '/challenges';
             return;
         }
 

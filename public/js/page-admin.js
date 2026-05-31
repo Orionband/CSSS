@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const boot = await initShell('admin');
     if (!boot) return;
     if (!boot.user?.is_admin) {
-        location.href = '/challenges.html';
+        location.href = '/challenges';
         return;
     }
     await loadAdminPanel();
