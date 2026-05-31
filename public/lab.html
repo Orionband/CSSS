@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lab</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <div id="modal-container" class="modal hidden">
+        <div class="modal-content" id="modal-box">
+            <span class="modal-close" id="modal-close-btn">&times;</span>
+            <div id="modal-inner"></div>
+        </div>
+    </div>
+
+    <nav class="navBar">
+        <a href="/challenges.html" class="nav-brand navElement" id="nav-brand"></a>
+        <div class="nav-links-row" id="nav-links-container"></div>
+        <div class="nav-user navElement">
+            <span id="uid-display"></span>
+            <button type="button" class="logout-btn" id="btn-logout">Logout</button>
+        </div>
+    </nav>
+    <script src="/js/branding-init.js"></script>
+
+    <main class="main-content">
+        <div class="content-wrap">
+            <div class="page-top">
+                <a href="/challenges.html" class="btn-ghost">&larr; Back to Challenges</a>
+                <h2 id="lab-title">Lab</h2>
+            </div>
+
+            <div id="lab-loading" class="page-loading">Loading lab&hellip;</div>
+
+            <section id="lab-start-screen" class="componentContainer challenge-intro hidden">
+                <ul class="info-list">
+                    <li><span class="info-label">Time Limit</span><span id="lab-stat-time"></span></li>
+                    <li><span class="info-label">Attempts</span><span id="lab-stat-attempts"></span></li>
+                    <li><span class="info-label">PKA File</span><span id="lab-stat-pka"></span></li>
+                </ul>
+                <div id="lab-info-error" class="error-msg hidden"></div>
+                <button type="button" id="btn-start-lab" class="intro-action">Start Lab</button>
+            </section>
+
+            <section id="lab-active-screen" class="hidden">
+                <div class="componentContainer">
+                    <div class="panel-header">
+                        <h2 id="lab-active-title">Lab In Progress</h2>
+                        <div class="panel-header-actions">
+                            <div id="lab-timer" class="quiz-timer"></div>
+                            <a href="/challenges.html" class="btn-ghost">&larr; Back</a>
+                        </div>
+                    </div>
+                    <div id="lab-download-area" class="hidden" style="margin-bottom: 20px;">
+                        <a id="lab-download-btn" class="lab-download-link">Download Lab File</a>
+                    </div>
+                    <p>Upload your completed Packet Tracer file to be graded.</p>
+                    <div class="upload-area" id="upload-area-box">
+                        <div class="upload-icon">+</div>
+                        <div class="upload-title">Click to Select File</div>
+                        <div class="upload-hint">.pka or .pkt files supported</div>
+                        <input type="file" id="f" class="hidden" accept=".pka,.pkt">
+                    </div>
+                    <div id="progress-container"><div id="progress-bar"></div></div>
+                    <div id="status"></div>
+                </div>
+                <div id="report" class="componentContainer hidden">
+                    <div class="panel-header">
+                        <h2>Results</h2>
+                        <div id="final-score" class="score-display"></div>
+                    </div>
+                    <div id="checks-list"></div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script type="module" src="js/page-lab.js"></script>
+</body>
+</html>

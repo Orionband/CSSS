@@ -4,9 +4,10 @@ const toml = require('toml');
 const xml2js = require('xml2js');
 const fs = require('fs');
 const crypto = require('crypto');
-const { xor, cmac, decryptCTR } = require('./crypto');
+const { xor, cmac, decryptCTR, PKT_N_TAG, PKT_H_TAG } = require('./crypto');
 const { parseCiscoConfig } = require('./parser');
 const { evaluateCondition } = require('./grading');
+const { validateXmlParseBudget, assertParsedXmlWithinBudget } = require('./xmlLimits');
 
 (async () => {
     try {
@@ -25,36 +26,37 @@ const { evaluateCondition } = require('./grading');
         const limitMb = maxXmlMb || 20; 
         const MAX_XML_OUTPUT = 1024 * 1024 * limitMb; 
         
+        const notifyFileVerified = () => {
+            parentPort.postMessage({ type: 'file_verified' });
+        };
+
         if (inputBuffer.subarray(0, 5).toString() === "<?xml") {
-            report("Reading XML", 50);
-            finalXML = inputBuffer.toString();
-            if (finalXML.length > MAX_XML_OUTPUT) {
-                throw new Error("Decompression failed or file too large.");
-            }
-        } else {
+            throw new Error("File Integrity Failed");
+        }
+
+        {
             const key = Buffer.alloc(16, 137);
-            const iv = Buffer.alloc(16, 16);
-            
+
             const s1 = Buffer.allocUnsafe(totalBytes);
-            const updateInterval = Math.floor(safeTotal / 10);
-            
+            const progressStride = Math.max(100000, Math.floor(safeTotal / 10));
+
             report("Deobfuscating", 0);
             for (let i = 0; i < totalBytes; i++) {
                 s1[i] = (inputBuffer[totalBytes - 1 - i] ^ ((totalBytes - (i * totalBytes)) | 0)) & 0xFF;
-                if (i % updateInterval === 0) report("Deobfuscating", (i / safeTotal) * 30);
+                if (i > 0 && i % progressStride === 0) {
+                    report("Deobfuscating", (i / safeTotal) * 30);
+                }
             }
 
             report("Decrypting", 30);
             const tag = s1.subarray(totalBytes - 16);
             const ciphertext = s1.subarray(0, totalBytes - 16);
-            
-            const nTag = cmac(key, 0, iv);
-            const hTag = cmac(key, 1, Buffer.alloc(0));
+
             const cTag = cmac(key, 2, ciphertext);
-            const computedTag = xor(xor(nTag, hTag), cTag);
+            const computedTag = xor(xor(PKT_N_TAG, PKT_H_TAG), cTag);
             if (computedTag.length !== tag.length || !crypto.timingSafeEqual(computedTag, tag)) throw new Error("File Integrity Failed");
             report("Decrypting", 45);
-            let decrypted = decryptCTR(key, nTag, ciphertext);
+            let decrypted = decryptCTR(key, PKT_N_TAG, ciphertext);
 
             report("Finalizing", 60);
             const s3 = Buffer.allocUnsafe(decrypted.length);
@@ -75,6 +77,7 @@ const { evaluateCondition } = require('./grading');
                     throw new Error("Decompression failed or file too large.");
                 }
             }
+            notifyFileVerified();
         }
 
         report("Grading...", 70);
@@ -86,12 +89,15 @@ const { evaluateCondition } = require('./grading');
         finalXML = stripDoctypeCompletely(finalXML);
         finalXML = finalXML.replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
 
+        validateXmlParseBudget(finalXML);
+
         const parser = new xml2js.Parser({
             strict: true,
             xmlns: false,
             entityExpansionMaxDepth: 1
         });
         const xmlObj = await parser.parseStringPromise(finalXML);
+        assertParsedXmlWithinBudget(xmlObj);
         const devMap = {};
         
         // Support both .pka (Activity) and .pkt (Network) XML structures
@@ -126,6 +132,10 @@ const { evaluateCondition } = require('./grading');
 
         checks.forEach(check => {
             const pts = parseInt(check.points);
+            if (Number.isNaN(pts)) {
+                console.warn(`[Worker] Skipping check with invalid points: ${check.message}`);
+                return;
+            }
             if (pts > 0) maxScore += pts;
             
             const device = devMap[check.device];
@@ -207,6 +217,9 @@ function sanitizeErrorMessage(rawMessage) {
     const msg = rawMessage.toLowerCase();
     
     if (msg.includes('file integrity failed')) return "File integrity check failed. The file may be corrupted.";
+    if (msg.includes('element limit') || msg.includes('nesting depth') || msg.includes('parse size limit') || msg.includes('invalid xml structure')) {
+        return "The file exceeds size or complexity limits.";
+    }
     if (msg.includes('decompression failed') || msg.includes('too large')) return "File decompression failed or exceeds size limits.";
     if (msg.includes('lab configuration not found')) return "Lab configuration not found for the selected lab.";
     if (msg.includes('unexpected end')) return "The uploaded file appears to be incomplete or corrupted.";

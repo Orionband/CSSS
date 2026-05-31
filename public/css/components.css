@@ -1,0 +1,149 @@
+.componentContainer {
+    background: var(--container-bg);
+    border-radius: 2px;
+    padding: clamp(10px, 2vw, 16px);
+    margin-bottom: 20px;
+}
+
+.componentContainerRound {
+    background: var(--container-bg);
+    border-radius: 10px;
+    padding: clamp(10px, 2vw, 16px);
+}
+
+input[type="text"], input[type="password"], input[type="email"], input[type="number"],
+.quiz-text-input, .field-input {
+    background: var(--input-bg);
+    color: var(--text);
+    width: min(300px, 100%);
+    border: solid var(--input-bg);
+    border-radius: 5px;
+    padding: 8px;
+    margin: 5px auto;
+    font-size: clamp(11pt, 2.5vw, 13pt);
+    font-family: 'Roboto Mono', monospace;
+    display: block;
+}
+
+.componentContainer input[type="text"],
+.componentContainer input[type="password"],
+.componentContainer input[type="email"],
+.componentContainer input[type="number"],
+.componentContainer .quiz-text-input,
+.componentContainer .field-input {
+    width: 100%;
+    margin: 8px 0;
+}
+
+input:focus, .quiz-text-input:focus, .field-input:focus { outline: none; }
+
+button {
+    font-family: 'Roboto Mono', monospace;
+    border: none;
+    border-radius: 3px;
+    background: var(--accent);
+    color: #101010;
+    user-select: none;
+    padding: 10px 20px;
+    font-size: clamp(10pt, 2.5vw, 12pt);
+    font-weight: bold;
+    cursor: pointer;
+    margin: 10px 5px;
+    text-transform: uppercase;
+    width: min(200px, 100%);
+}
+button:hover { background: var(--accent-hover); }
+button:active, button:focus { outline: none; }
+
+.btn-secondary { background: #444; color: #fff; width: auto; min-width: 120px; }
+.btn-secondary:hover { background: #555; }
+.btn-danger { background: transparent; border: 1px solid var(--accent); color: var(--accent); width: auto; }
+.btn-danger:hover { background: rgba(240, 93, 94, 0.1); }
+.btn-small { padding: 6px 12px; font-size: 0.8rem; width: auto; min-width: 0; margin: 0; }
+.btn-block { width: 100%; max-width: none; }
+.btn-ghost {
+    background: none;
+    color: var(--text-dim);
+    width: auto;
+    min-width: 0;
+    padding: 4px 0;
+    margin: 0;
+    font-size: 0.85rem;
+}
+.btn-ghost:hover { background: none; color: var(--accent); text-decoration: none; }
+
+.logout-btn {
+    background: none;
+    color: var(--text);
+    width: auto;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+.logout-btn:hover { background: none; color: var(--accent); text-decoration: none; }
+
+.auth-link { margin-top: 10px; font-size: 0.9rem; color: var(--text-dim); }
+.error-msg { color: var(--accent); margin-top: 15px; font-weight: bold; }
+.password-hint { color: var(--text-dim); font-size: 0.8rem; margin: 2px auto 8px; max-width: 300px; }
+
+.modal {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(0,0,0,0.85);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    padding: 16px;
+}
+.modal-content {
+    background: var(--container-bg);
+    padding: clamp(16px, 4vw, 25px);
+    border-radius: 2px;
+    width: 500px;
+    max-width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+}
+.modal-close {
+    position: absolute;
+    right: 16px;
+    top: 12px;
+    cursor: pointer;
+    font-size: 1.8rem;
+    color: #888;
+}
+.modal-close:hover { color: var(--accent); }
+
+.type-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    vertical-align: middle;
+}
+.type-badge-lab { background: #333; color: #fff; }
+.type-badge-quiz { background: var(--accent); color: #101010; }
+
+.custom-label { display: inline-flex; align-items: center; position: relative; padding-left: 28px; cursor: pointer; font-size: 0.95rem; color: #ccc; user-select: none; margin: 10px 0;}
+.custom-label input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
+.checkmark { position: absolute; top: 50%; left: 0; transform: translateY(-50%); height: 18px; width: 18px; background-color: #222; border: 1px solid #555; border-radius: 3px; transition: 0.2s; }
+.custom-label:hover input ~ .checkmark { background-color: #333; border-color: #777;}
+.custom-label input:checked ~ .checkmark { background-color: var(--accent); border-color: var(--accent); }
+.checkmark:after { content: ""; position: absolute; display: none; }
+.custom-label input:checked ~ .checkmark:after { display: block; }
+.custom-label .checkmark:after { left: 6px; top: 2px; width: 4px; height: 9px; border: solid #101010; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 10px; border-bottom: 2px solid var(--input-bg); color: var(--text-dim); text-transform: uppercase; font-size: 0.85rem; }
+td { padding: 12px 10px; border-bottom: 1px solid var(--input-bg); }
+tr:last-child td { border-bottom: none; }
+
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }

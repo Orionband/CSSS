@@ -60,11 +60,18 @@ io.engine.use(sessionMiddleware);
 
 app.use((req, res, next) => {
    if (req.session && req.session.userId) {
-       const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.session.userId);
+       const user = db.prepare('SELECT id, password_changed_at FROM users WHERE id = ?').get(req.session.userId);
        if (!user) {
            req.session.destroy(() => {
                res.clearCookie('connect.sid');
                return res.status(401).json({ error: "Session invalidated: Account no longer exists." });
+           });
+           return;
+       }
+       if (user.password_changed_at && (!req.session.authenticatedAt || req.session.authenticatedAt < user.password_changed_at)) {
+           req.session.destroy(() => {
+               res.clearCookie('connect.sid');
+               return res.status(401).json({ error: "Session invalidated: Password was reset. Please log in again." });
            });
            return;
        }
@@ -85,7 +92,7 @@ app.use((req, res, next) => {
        "default-src 'self'; " +
        "script-src 'self'; " +
        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-       "font-src 'self' https://fonts.gstatic.com; " +
+       "font-src 'self' https://fonts.gstatic.com data:; " +
        "img-src 'self' data:; " +
        "connect-src 'self' ws: wss:; " +
        "frame-ancestors 'none';"
@@ -119,11 +126,21 @@ app.get('/health', (req, res) => {
    res.status(200).send('OK');
 });
 
-app.use(express.static(path.join(__dirname, '../public')));
 app.use('/api', authRoutes);
 app.use('/api/quiz', quizRoutes);
 app.use('/api/admin', adminRoutes);
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../index.html')));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+app.get('/admin.html', (req, res) => {
+   if (!req.session?.userId) {
+       return res.redirect('/index.html');
+   }
+   const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
+   if (!user || user.is_admin !== 1) {
+       return res.redirect('/challenges.html');
+   }
+   res.sendFile(path.join(__dirname, '../public/admin.html'));
+});
+app.use(express.static(path.join(__dirname, '../public')));
 
 const MAX_WORKERS = parseInt(process.env.MAX_WORKERS) || 4;
 let activeWorkers = 0;
@@ -165,6 +182,7 @@ function processWorkerQueue() {
 
    worker.on('message', (msg) => {
        if (msg.type === 'progress') socket.emit('progress', msg);
+       else if (msg.type === 'file_verified') socket.emit('file_verified');
        else if (msg.type === 'result') {
            clearTimeout(timeoutHandle);
            try {
@@ -339,6 +357,18 @@ io.on('connection', (socket) => {
            return socket.emit('err', "Session expired. Please refresh and log in again.");
        }
 
+       const userRow = db.prepare('SELECT id, password_changed_at FROM users WHERE id = ?').get(sess.userId);
+       if (!userRow) {
+           isAuthenticated = false;
+           socketUser = null;
+           return socket.emit('err', "Session expired. Please refresh and log in again.");
+       }
+       if (userRow.password_changed_at && (!sess.authenticatedAt || sess.authenticatedAt < userRow.password_changed_at)) {
+           isAuthenticated = false;
+           socketUser = null;
+           return socket.emit('err', "Session expired. Please refresh and log in again.");
+       }
+
        const clientToken = packet._csrf;
        if (!clientToken || clientToken !== sess.csrfToken) {
            return socket.emit('err', "Invalid CSRF token. Please refresh the page.");
@@ -386,48 +416,23 @@ io.on('connection', (socket) => {
            const activeSession = db.prepare("SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1")
                .get(userId, labId);
 
-           if (activeSession) {
-               if (targetLab.time_limit_minutes && targetLab.time_limit_minutes > 0) {
-                   const startTime = new Date(activeSession.timestamp.replace(' ', 'T') + 'Z').getTime();
-                   const elapsed = Math.floor((Date.now() - startTime) / 1000);
+           if (!activeSession) {
+               db.releaseLock(lockKey);
+               return socket.emit('err', "No active lab session. Please start the lab first.");
+           }
 
-                   if (elapsed > (targetLab.time_limit_minutes * 60) + 2) {
-                       db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
-                           .run(JSON.stringify([{message: "Time expired on submission.", device: "N/A", possible: 0, awarded: 0, passed: false}]), activeSession.id);
-                       db.releaseLock(lockKey);
-                       return socket.emit('err', "Time limit expired. Your submission was rejected.");
-                   }
-               }
-               inProgressId = activeSession.id;
-           } else {
-               if (targetLab.time_limit_minutes && targetLab.time_limit_minutes > 0) {
+           if (targetLab.time_limit_minutes && targetLab.time_limit_minutes > 0) {
+               const startTime = new Date(activeSession.timestamp.replace(' ', 'T') + 'Z').getTime();
+               const elapsed = Math.floor((Date.now() - startTime) / 1000);
+
+               if (elapsed > (targetLab.time_limit_minutes * 60) + 2) {
+                   db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
+                       .run(JSON.stringify([{message: "Time expired on submission.", device: "N/A", possible: 0, awarded: 0, passed: false}]), activeSession.id);
                    db.releaseLock(lockKey);
-                   return socket.emit('err', "No active lab session. Please start the lab first.");
-               }
-
-               const canSubmit = db.transaction((uid, lid, maxSubs, rateLimitCount, rateLimitWindow) => {
-                   if (maxSubs > 0) {
-                       const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(uid, lid).c;
-                       if (count >= maxSubs) return { allowed: false, reason: "Submission limit reached." };
-                   }
-                   if (rateLimitCount > 0) {
-                       const win = rateLimitWindow || 60;
-                       const recent = db.prepare("SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')").get(uid, lid, win).c;
-                       if (recent >= rateLimitCount) return { allowed: false, reason: "Rate limit exceeded. Please wait." };
-                   }
-                   return { allowed: true };
-               });
-
-               const maxSubs = targetLab.max_submissions || 0;
-               const rateLimitCount = targetLab.rate_limit_count || 0;
-               const rateLimitWindow = targetLab.rate_limit_window_seconds || 60;
-               
-               const check = canSubmit(userId, labId, maxSubs, rateLimitCount, rateLimitWindow);
-               if (!check.allowed) {
-                   db.releaseLock(lockKey);
-                   return socket.emit('err', check.reason);
+                   return socket.emit('err', "Time limit expired. Your submission was rejected.");
                }
            }
+           inProgressId = activeSession.id;
 
            const maxXmlMb = targetLab.max_xml_output_mb || 20;
 

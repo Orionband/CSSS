@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <div id="modal-container" class="modal hidden">
+        <div class="modal-content" id="modal-box">
+            <span class="modal-close" id="modal-close-btn">&times;</span>
+            <div id="modal-inner"></div>
+        </div>
+    </div>
+
+    <nav class="navBar">
+        <a href="/challenges.html" class="nav-brand navElement" id="nav-brand"></a>
+        <div class="nav-links-row" id="nav-links-container"></div>
+        <div class="nav-user navElement">
+            <span id="uid-display"></span>
+            <button type="button" class="logout-btn" id="btn-logout">Logout</button>
+        </div>
+    </nav>
+    <script src="/js/branding-init.js"></script>
+
+    <main class="main-content">
+        <div class="content-wrap">
+            <div class="admin-container">
+                <div class="admin-header">
+                    <h2 style="margin:0;color:var(--accent)">Admin</h2>
+                    <div class="admin-tabs">
+                        <div class="admin-tab active" id="tab-admin-users">Manage Users</div>
+                        <div class="admin-tab" id="tab-admin-lb">Manage Leaderboard</div>
+                    </div>
+                </div>
+
+                <div id="admin-panel-users" class="admin-panel-content">
+                    <div class="admin-toolbar">
+                        <button class="btn-secondary btn-small" id="btn-admin-new-user">+ Create New User</button>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="admin-table" id="admin-users-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Username</th>
+                                    <th>Subs</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-users-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="admin-panel-lb" class="admin-panel-content hidden">
+                    <div class="table-wrapper">
+                        <table class="admin-table" id="admin-lb-table">
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Raw LB Score</th>
+                                    <th>Global Mod (+/-)</th>
+                                    <th>Total Score</th>
+                                    <th>Withheld?</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-lb-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="js/page-admin.js"></script>
+</body>
+</html>

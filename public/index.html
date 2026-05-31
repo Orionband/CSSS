@@ -4,204 +4,43 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CSSS</title>
-    <script src="/socket.io/socket.io.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+    <div id="auth-view" class="centerField">
+        <h1 id="auth-title"></h1>
+        <script src="/js/branding-init.js"></script>
+        <small class="auth-subtitle">Using a Cisco Server-sided Scoring System</small>
+        <br>
 
-    <!-- ADMIN MODALS -->
-    <div id="modal-container" class="modal hidden">
-        <div class="modal-content" id="modal-box">
-            <span class="modal-close" id="modal-close-btn">×</span>
-            <div id="modal-inner"></div>
-        </div>
-    </div>
-
-    <!-- AUTH VIEW -->
-    <div id="auth-view" class="center-wrapper hidden">
-        <div class="auth-box">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <h1 id="auth-title">CSSS</h1>
-                <p style="color: var(--text-dim)">using a Cisco Server-sided Scoring System</p>
-            </div>
-            
-            <div class="componentContainer">
-                <div id="login-form">
-                    <h2>Login</h2>
-                    <input type="text" id="l-user" placeholder="Username">
-                    <input type="password" id="l-pass" placeholder="Password">
-                    <button id="btn-login-submit">Login >></button>
-                    <div class="auth-link">
-                        Don't have an account? <a id="link-show-register">Register</a>
-                    </div>
-                </div>
-
-                <div id="register-form" class="hidden">
-                    <h2>Register</h2>
-                    <input type="text" id="r-user" placeholder="Username">
-                    <input type="email" id="r-email" placeholder="Email">
-                    <input type="password" id="r-pass" placeholder="Password">
-                    <div class="password-hint">Min 8 characters, 1 uppercase letter, 1 number</div>
-                    <button id="btn-register-submit">Create Account >></button>
-                    <div class="auth-link">
-                        Already have an account? <a id="link-show-login">Login</a>
-                    </div>
-                </div>
-
-                <div id="auth-error" class="error-msg"></div>
+        <div id="login-form">
+            <h2>Login</h2>
+            <input type="text" id="l-user" placeholder="Username" autocomplete="username">
+            <input type="password" id="l-pass" placeholder="Password" autocomplete="current-password">
+            <button id="btn-login-submit">Login &gt;&gt;</button>
+            <div class="auth-link">
+                Don't have an account? <a id="link-show-register">Register</a>
             </div>
         </div>
+
+        <div id="register-form" class="hidden">
+            <h2>Register</h2>
+            <input type="text" id="r-user" placeholder="Username" autocomplete="username">
+            <input type="email" id="r-email" placeholder="Email" autocomplete="email">
+            <input type="password" id="r-pass" placeholder="Password" autocomplete="new-password">
+            <div class="password-hint">Min 8 characters, 1 uppercase letter, 1 number</div>
+            <button id="btn-register-submit">Create Account &gt;&gt;</button>
+            <div class="auth-link">
+                Already have an account? <a id="link-show-login">Login</a>
+            </div>
+        </div>
+
+        <div id="auth-error" class="error-msg"></div>
     </div>
 
-    <!-- APP VIEW -->
-    <div id="app-view" class="hidden">
-        <nav class="sidebar">
-            <div class="sidebar-header">
-                <div class="nav-brand" id="nav-brand">CSSS</div>
-            </div>
-            <div class="nav-links" id="nav-links-container"></div>
-            <div class="sidebar-footer">
-                <div id="uid-display"></div>
-                <div class="logout-btn" id="btn-logout">[ LOGOUT ]</div>
-            </div>
-        </nav>
-
-        <main class="main-content">
-            
-            <div id="view-grader" class="hidden">
-                <div id="lab-start-screen" class="componentContainer">
-                    <h2 id="lab-title">Challenge</h2>
-                    <div id="lab-info-area"></div>
-                </div>
-                <div id="lab-active-screen" class="hidden">
-                    <div class="componentContainer">
-                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px;">
-                            <h2 id="lab-active-title" style="margin:0">Lab In Progress</h2>
-                            <div id="lab-timer" class="quiz-timer"></div>
-                        </div>
-                        <div id="lab-download-area" class="hidden" style="margin-bottom: 20px;">
-                            <a id="lab-download-btn" class="lab-download-link">Download Lab File</a>
-                        </div>
-                        <p>Upload your completed Packet Tracer file (.pka/.pkt) to be graded.</p>
-                        <div class="upload-area" id="upload-area-box">
-                            <div style="font-size: 3rem; color: var(--accent); margin-bottom: 15px;">[ + ]</div>
-                            <div style="font-weight: bold; font-size: 1.1rem;">CLICK TO SELECT FILE</div>
-                            <div style="color: var(--text-dim); font-size: 0.9rem; margin-top: 5px;">.pka or .pkt files supported</div>
-                            <input type="file" id="f" style="display:none" accept=".pka,.pkt">
-                        </div>
-                        <div id="progress-container"><div id="progress-bar"></div></div>
-                        <div id="status"></div>
-                    </div>
-                    <div id="report" class="componentContainer hidden">
-                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:15px; margin-bottom:15px;">
-                            <h2 style="margin:0">Results</h2>
-                            <div id="final-score" style="font-size:2rem; font-weight:bold; color:var(--accent)"></div>
-                        </div>
-                        <div id="checks-list"></div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="view-quiz" class="hidden">
-                <div class="componentContainer">
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px;">
-                        <h2 id="quiz-title" style="margin:0">Quiz Title</h2>
-                        <div id="quiz-timer" class="quiz-timer"></div>
-                    </div>
-                    <div id="quiz-questions-area"></div>
-                    <button id="btn-submit-quiz">Submit Answers >></button>
-                </div>
-                <div id="quiz-result" class="componentContainer hidden">
-                    <h2 style="color:var(--accent)">Quiz Results</h2>
-                    <div id="quiz-score-display" style="font-size:1.5rem; font-weight:bold; margin-bottom:20px"></div>
-                    <div id="quiz-feedback-list"></div>
-                </div>
-            </div>
-
-            <div id="view-leaderboard" class="hidden">
-                <div class="componentContainer">
-                    <h2>Leaderboard</h2>
-                    <div style="overflow-x: auto;">
-                        <table id="lb-table">
-                            <thead><tr></tr></thead>
-                            <tbody id="lb-body"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <div id="view-history" class="hidden">
-                <div class="componentContainer">
-                    <h2>Submission History</h2>
-                    <div id="history-list"></div>
-                </div>
-                <div id="history-detail" class="componentContainer hidden">
-                    <div style="display:flex; justify-content:space-between; border-bottom:1px solid #333; padding-bottom:15px; margin-bottom:15px;">
-                        <div>
-                            <h2 style="margin:0">Details</h2>
-                            <span id="hist-lab" style="color:var(--accent); font-weight:bold; display:block; margin-bottom:5px;"></span>
-                            <span id="hist-date" style="color:var(--text-dim); font-size:0.9rem"></span>
-                        </div>
-                        <div id="hist-score" style="font-size:2rem; font-weight:bold; color:var(--accent)"></div>
-                    </div>
-                    <div id="hist-checks"></div>
-                    <button class="btn-secondary" id="btn-close-history" style="margin-top:20px; width: auto;"><< Back</button>
-                </div>
-            </div>
-
-            <!-- ADMIN VIEW -->
-            <div id="view-admin" class="hidden">
-                <div class="admin-container">
-                    <div class="admin-header">
-                        <h2 style="margin:0; color:var(--accent)">[ ADMIN PANEL ]</h2>
-                        <div class="admin-tabs">
-                            <div class="admin-tab active" id="tab-admin-users">Manage Users</div>
-                            <div class="admin-tab" id="tab-admin-lb">Manage Leaderboard</div>
-                        </div>
-                    </div>
-                    
-                    <div id="admin-panel-users" class="admin-panel-content">
-                        <div class="admin-toolbar">
-                            <button class="btn-secondary btn-small" id="btn-admin-new-user" style="margin:0;">+ Create New User</button>
-                        </div>
-                        <div class="table-wrapper">
-                            <table class="admin-table" id="admin-users-table">
-                                <thead>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th>Username</th>
-                                        <th>Subs</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="admin-users-body"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div id="admin-panel-lb" class="admin-panel-content hidden">
-                        <div class="table-wrapper">
-                            <table class="admin-table" id="admin-lb-table">
-                                <thead>
-                                    <tr>
-                                        <th>Username</th>
-                                        <th>Raw LB Score</th>
-                                        <th>Global Mod (+/-)</th>
-                                        <th>Total Score</th>
-                                        <th>Withheld?</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="admin-lb-body"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-        </main>
-    </div>
-    <script src="script.js"></script>
+    <script type="module" src="js/auth-main.js"></script>
 </body>
 </html>

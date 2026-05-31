@@ -1,0 +1,216 @@
+.centerField {
+    display: flex;
+    min-height: 100vh;
+    padding: clamp(16px, 4vw, 30px);
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    color: var(--text);
+    text-align: center;
+}
+
+.centerField input[type="text"],
+.centerField input[type="password"],
+.centerField input[type="email"] {
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.auth-subtitle {
+    display: block;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    max-width: 28rem;
+}
+
+#app-view {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    width: 100%;
+}
+
+.navBar {
+    display: flex;
+    align-items: stretch;
+    min-height: var(--nav-height);
+    padding: 0 clamp(8px, 2vw, 16px);
+    border-bottom: 1px solid var(--input-bg);
+    flex-shrink: 0;
+    gap: 4px;
+}
+
+.nav-links-row {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.nav-spacer { display: none; }
+
+.nav-brand {
+    padding: 0 clamp(12px, 2vw, 18px) 0;
+    margin-right: 4px;
+    font-weight: 700;
+    font-size: clamp(0.85rem, 2vw, 1rem);
+    text-transform: uppercase;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    text-decoration: none;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.2em;
+    line-height: 1.2;
+    min-height: var(--nav-height);
+}
+#nav-brand:not(.is-branded),
+#auth-title:not(.is-branded) {
+    visibility: hidden;
+}
+#auth-title.is-branded {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.2em;
+}
+.nav-brand span,
+#auth-title span {
+    color: var(--accent);
+}
+.nav-brand:hover {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.navElement {
+    align-items: center;
+    display: flex;
+    min-height: var(--nav-height);
+    white-space: nowrap;
+}
+
+.nav-link {
+    padding: 0 clamp(10px, 2vw, 14px);
+    cursor: pointer;
+    color: var(--text);
+    border-bottom: 2px solid var(--text);
+    font-weight: bold;
+    font-size: clamp(0.75rem, 2vw, 0.85rem);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    transition: color 0.15s, border-color 0.15s;
+    user-select: none;
+    line-height: var(--nav-height);
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+}
+
+.nav-link:hover { color: var(--text-dim); text-decoration: none; }
+
+.activeNav {
+    border-bottom: 2px solid var(--accent) !important;
+    color: var(--accent) !important;
+}
+
+.nav-admin-link {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.nav-user {
+    gap: clamp(8px, 2vw, 12px);
+    padding-left: 8px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+#uid-display {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-family: monospace;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.main-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: clamp(16px, 4vw, 30px);
+    background: var(--bg);
+}
+
+.content-wrap {
+    width: 100%;
+    max-width: var(--content-max);
+    margin: 0 auto;
+}
+
+.page-header {
+    text-align: center;
+    margin-bottom: clamp(16px, 3vw, 24px);
+}
+
+.page-header h2 { margin-bottom: 4px; }
+
+.page-header small {
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--input-bg);
+    padding-bottom: 15px;
+    margin-bottom: 20px;
+}
+
+.panel-header h2 { margin: 0; }
+
+.panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+    .navBar {
+        flex-wrap: wrap;
+        padding-top: 6px;
+        padding-bottom: 6px;
+    }
+
+    .nav-user {
+        width: 100%;
+        justify-content: space-between;
+        padding-left: 0;
+        margin-left: 0;
+        border-top: 1px solid var(--input-bg);
+        padding-top: 6px;
+    }
+
+    #uid-display { max-width: 60%; }
+
+    .panel-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .quiz-timer {
+        text-align: left;
+        width: 100%;
+    }
+}

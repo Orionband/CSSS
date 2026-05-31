@@ -21,6 +21,8 @@ const registerLimiter = rateLimit({ windowMs: 24*60*60*1000, max: 10, standardHe
 const loginLimiter = rateLimit({ windowMs: 5*60*1000, max: 5, standardHeaders: true, legacyHeaders: false });
 const csrfLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
 const leaderboardLimiter = rateLimit({ windowMs: 10 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const labStartLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const downloadLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 
 router.get('/csrf-token', csrfLimiter, (req, res) => {
     if (!req.session) return res.status(500).json({ error: "Session unavailable" });
@@ -81,13 +83,13 @@ router.post('/register', registerLimiter, async (req, res) => {
             if (err) return res.status(500).json({ error: "Registration failed. Please try again." });
             req.session.userId = info.lastInsertRowid;
             req.session.uniqueId = uid;
+            req.session.authenticatedAt = Date.now();
             req.session.save((saveErr) => {
                 if (saveErr) return res.status(500).json({ error: "Session save failed." });
                 res.json({ success: true, unique_id: uid });
             });
         });
     } catch (err) {
-        // Redefined to prevent account enumeration / reconnaissance (VULN-D)
         res.status(400).json({ error: "Registration failed. Please try different details." });
     }
 });
@@ -114,6 +116,9 @@ router.post('/login', loginLimiter, async (req, res) => {
         const hashToCompare = user ? user.password : DUMMY_HASH;
         
         const pwd = password !== undefined && password !== null ? String(password) : "";
+        if (pwd.length > 100) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
         const passwordMatch = await bcrypt.compare(pwd, hashToCompare);
 
         if (!user || !passwordMatch) {
@@ -124,6 +129,7 @@ router.post('/login', loginLimiter, async (req, res) => {
             if (err) return res.status(500).json({ error: "Login failed. Please try again." });
             req.session.userId = user.id;
             req.session.uniqueId = user.unique_id;
+            req.session.authenticatedAt = Date.now();
             req.session.save((saveErr) => {
                 if (saveErr) return res.status(500).json({ error: "Session save failed." });
                 res.json({ success: true, unique_id: user.unique_id });
@@ -140,26 +146,76 @@ router.get('/me', (req, res) => {
     res.json({ id: req.session.userId, unique_id: req.session.uniqueId, is_admin: user && user.is_admin === 1 });
 });
 
-router.get('/config', (req, res) => {
-    const cfg = getConfig();
-    const safeLabs = (cfg.labs || []).filter(l => isWindowOpen(l)).map(l => ({ id: l.id, title: l.title, type: 'lab' }));
-    const safeQuizzes = (cfg.quizzes || []).filter(q => isWindowOpen(q)).map(q => ({ id: q.id, title: q.title, type: 'quiz' }));
-
+function appOptions() {
     const fullTitle = process.env.APP_TITLE || 'CSSS ENGINE';
     const parts = fullTitle.split(' ');
-    let titleMain = parts[0] || '';
-    let titleHighlight = parts.slice(1).join(' ') || '';
+    return {
+        show_leaderboard: process.env.SHOW_LEADERBOARD === 'true',
+        show_history: process.env.SHOW_HISTORY === 'true',
+        app_title: fullTitle,
+        app_title_main: parts[0] || '',
+        app_title_highlight: parts.slice(1).join(' ') || '',
+    };
+}
 
+function labMaxPoints(lab) {
+    return (lab.checks || []).reduce((sum, c) => {
+        const p = parseInt(c.points, 10);
+        return sum + (Number.isFinite(p) && p > 0 ? p : 0);
+    }, 0);
+}
+
+function quizMaxPoints(quiz) {
+    return (quiz.questions || []).reduce((sum, q) => {
+        const p = q.points !== undefined ? parseInt(q.points, 10) : 1;
+        return sum + (Number.isFinite(p) && p > 0 ? p : 0);
+    }, 0);
+}
+
+function buildChallengeList(cfg) {
+    const safeLabs = (cfg.labs || []).filter(l => isWindowOpen(l)).map(l => ({
+        id: l.id,
+        title: l.title,
+        type: 'lab',
+        points: labMaxPoints(l),
+    }));
+
+    const safeQuizzes = (cfg.quizzes || []).filter(q => isWindowOpen(q)).map(q => ({
+        id: q.id,
+        title: q.title,
+        type: 'quiz',
+        points: quizMaxPoints(q),
+    }));
+
+    return [...safeLabs, ...safeQuizzes];
+}
+
+router.get('/config', (req, res) => {
+    const cfg = getConfig();
     const isAuthenticated = req.session && req.session.userId;
-    res.json({ 
-        challenges: isAuthenticated ? [...safeLabs, ...safeQuizzes] : [],
-        options: { 
-            show_leaderboard: process.env.SHOW_LEADERBOARD === 'true',
-            show_history: process.env.SHOW_HISTORY === 'true',
-            app_title: fullTitle,
-            app_title_main: titleMain,
-            app_title_highlight: titleHighlight
-        }
+    res.json({
+        challenges: isAuthenticated ? buildChallengeList(cfg) : [],
+        options: appOptions(),
+    });
+});
+
+router.get('/bootstrap', (req, res) => {
+    if (!req.session || !req.session.userId) {
+        return res.status(401).json({ error: 'Not logged in' });
+    }
+
+    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
+    const cfg = getConfig();
+
+    res.json({
+        user: {
+            id: req.session.userId,
+            unique_id: req.session.uniqueId,
+            is_admin: user && user.is_admin === 1,
+        },
+        csrfToken: req.session.csrfToken,
+        challenges: buildChallengeList(cfg),
+        options: appOptions(),
     });
 });
 
@@ -207,7 +263,7 @@ router.get('/lab/:id', (req, res) => {
     });
 });
 
-router.post('/lab/:id/start', (req, res) => {
+router.post('/lab/:id/start', labStartLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
     const cfg = getConfig();
@@ -273,7 +329,7 @@ router.post('/lab/:id/start', (req, res) => {
     }
 });
 
-router.get('/lab/:id/download', (req, res) => {
+router.get('/lab/:id/download', downloadLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).send("Unauthorized");
 
     const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.session.userId);
@@ -457,7 +513,8 @@ router.get('/history', (req, res) => {
 
         let details = [];
         try { details = JSON.parse(sub.details); } catch(e) {}
-        
+        if (!Array.isArray(details)) details = [];
+
         let clientDetails = null;
         if (showDetails) {
             if (type === 'quiz') {
