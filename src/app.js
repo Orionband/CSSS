@@ -15,15 +15,15 @@ const SqliteStore = require('better-sqlite3-session-store')(session);
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { Worker } = require('worker_threads');
-
 const os = require('os');
 const db = require('./database');
-const { getConfig, getRawConfig, isWindowOpen } = require('./config');
+const { getConfig, isWindowOpen } = require('./config');
+const { GraderWorkerPool } = require('./workerPool');
 const authRoutes = require('./routes/auth');
 const quizRoutes = require('./routes/quiz');
 const adminRoutes = require('./routes/admin');
 const app = express();
+app.disable('x-powered-by');
 if (process.env.TRUST_PROXY) {
    app.set('trust proxy', parseInt(process.env.TRUST_PROXY) || 1);
 }
@@ -41,6 +41,39 @@ let globalMaxUploadMB = 75;
 const io = new Server(server, { maxHttpBufferSize: globalMaxUploadMB * 1024 * 1024 });
 
 app.use(express.json({ limit: '1mb' }));
+
+// Security headers (applied before session so /health stays session-free)
+app.use((req, res, next) => {
+   res.setHeader('X-Content-Type-Options', 'nosniff');
+   res.setHeader('X-Frame-Options', 'DENY');
+   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+   if (process.env.NODE_ENV === 'production') {
+       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+   }
+   res.setHeader('Content-Security-Policy',
+       "default-src 'self'; " +
+       "script-src 'self'; " +
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+       "font-src 'self' https://fonts.gstatic.com data:; " +
+       "img-src 'self' data:; " +
+       "connect-src 'self' ws: wss:; " +
+       "frame-ancestors 'none';"
+   );
+   next();
+});
+
+app.use('/api', (req, res, next) => {
+   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+   res.setHeader('Pragma', 'no-cache');
+   res.setHeader('Expires', '0');
+   next();
+});
+
+// Health / keep-alive: no session store writes (load balancers, client poll)
+app.get('/health', (req, res) => {
+   res.status(200).send('OK');
+});
 
 const sessionMiddleware = session({
    store: new SqliteStore({ client: db, expired: { clear: true, intervalMs: 900000 } }),
@@ -79,73 +112,78 @@ app.use((req, res, next) => {
    next();
 });
 
-// Security headers
-app.use((req, res, next) => {
-   res.setHeader('X-Content-Type-Options', 'nosniff');
-   res.setHeader('X-Frame-Options', 'DENY');
-   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-   if (process.env.NODE_ENV === 'production') {
-       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-   }
-   res.setHeader('Content-Security-Policy',
-       "default-src 'self'; " +
-       "script-src 'self'; " +
-       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-       "font-src 'self' https://fonts.gstatic.com data:; " +
-       "img-src 'self' data:; " +
-       "connect-src 'self' ws: wss:; " +
-       "frame-ancestors 'none';"
-   );
-   next();
-});
-
-// CSRF token generation
-app.use((req, res, next) => {
-   if (req.session && !req.session.csrfToken) {
-       req.session.csrfToken = crypto.randomBytes(32).toString('hex');
-   }
-   next();
-});
-
-// CSRF validation for state-changing requests
-app.use((req, res, next) => {
+// CSRF validation for state-changing API requests only (tokens issued via GET /api/csrf-token)
+app.use('/api', (req, res, next) => {
    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-   
+
    const clientToken = req.headers['x-csrf-token'] || (req.body && req.body._csrf);
-   
+
    if (!req.session || !req.session.csrfToken || clientToken !== req.session.csrfToken) {
        return res.status(403).json({ error: "Invalid or missing CSRF token." });
    }
-   
-   next();
-});
 
-// Health check endpoint for Koyeb/Render keep-alive
-app.get('/health', (req, res) => {
-   res.status(200).send('OK');
+   next();
 });
 
 app.use('/api', authRoutes);
 app.use('/api/quiz', quizRoutes);
 app.use('/api/admin', adminRoutes);
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
-app.get('/admin.html', (req, res) => {
+
+const publicDir = path.join(__dirname, '../public');
+const sendPage = (filename) => (_req, res) => res.sendFile(path.join(publicDir, filename));
+
+app.get('/', sendPage('index.html'));
+app.get('/challenges', sendPage('challenges.html'));
+app.get('/history', sendPage('history.html'));
+app.get('/leaderboard', sendPage('leaderboard.html'));
+app.get('/lab', sendPage('lab.html'));
+app.get('/quiz', sendPage('quiz.html'));
+app.get('/admin', (req, res) => {
    if (!req.session?.userId) {
-       return res.redirect('/index.html');
+       return res.redirect('/');
    }
    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
    if (!user || user.is_admin !== 1) {
-       return res.redirect('/challenges.html');
+       return res.redirect('/challenges');
    }
-   res.sendFile(path.join(__dirname, '../public/admin.html'));
+   res.sendFile(path.join(publicDir, 'admin.html'));
 });
-app.use(express.static(path.join(__dirname, '../public')));
 
-const MAX_WORKERS = parseInt(process.env.MAX_WORKERS) || 4;
-let activeWorkers = 0;
-const workerQueue = [];
-const MAX_QUEUE_DEPTH = parseInt(process.env.MAX_QUEUE_DEPTH) || 50;
+// Case-insensitive legacy .html URLs → clean routes (avoids static bypass on case-sensitive routers).
+const LEGACY_HTML_REDIRECTS = {
+   'index.html': '/',
+   'challenges.html': '/challenges',
+   'history.html': '/history',
+   'leaderboard.html': '/leaderboard',
+   'lab.html': '/lab',
+   'quiz.html': '/quiz',
+   'admin.html': '/admin',
+};
+const LEGACY_HTML_NAMES = new Set(Object.keys(LEGACY_HTML_REDIRECTS));
+
+app.get(/^\/([^/]+\.html)$/i, (req, res, next) => {
+   const target = LEGACY_HTML_REDIRECTS[String(req.params[0]).toLowerCase()];
+   if (!target) return next();
+   const search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+   res.redirect(301, target + search);
+});
+
+// Never serve app shell HTML via static (Admin.html etc. on case-insensitive disks).
+app.use((req, res, next) => {
+   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+   const match = req.path.match(/^\/([^/]+\.html)$/i);
+   if (match && LEGACY_HTML_NAMES.has(match[1].toLowerCase())) {
+       return res.status(404).end();
+   }
+   next();
+});
+
+app.use(express.static(publicDir));
+
+const MAX_WORKERS = parseInt(process.env.MAX_WORKERS, 10) || 4;
+const MAX_QUEUE_DEPTH = parseInt(process.env.MAX_QUEUE_DEPTH, 10) || 50;
+const WORKER_TIMEOUT_MS = 120000;
+const graderPool = new GraderWorkerPool(MAX_WORKERS, WORKER_TIMEOUT_MS);
 
 const cleanupTempFile = (filePath) => {
    if (filePath && fs.existsSync(filePath)) {
@@ -153,93 +191,86 @@ const cleanupTempFile = (filePath) => {
    }
 };
 
-function processWorkerQueue() {
-   if (workerQueue.length === 0 || activeWorkers >= MAX_WORKERS) return;
-   activeWorkers++;
-   
-   const task = workerQueue.shift();
-   const { socket, workerData, lockKey, socketUser, targetLab, inProgressId } = task;
+function labConfigForWorker(lab) {
+   return JSON.parse(JSON.stringify(lab));
+}
 
-   const WORKER_TIMEOUT_MS = 120000;
-   const worker = new Worker(path.join(__dirname, 'worker/worker.js'), { workerData });
+function dispatchGradingTask(task) {
+   const { socket, lockKey, socketUser, targetLab, inProgressId, maxXmlMb, tempFilePath, fileBuffer, transferList } = task;
+   const retainXml = process.env.RETAIN_XML === 'true';
 
    let finished = false;
-   const finishWorker = () => {
+   const finishTask = () => {
        if (finished) return;
        finished = true;
-       clearTimeout(timeoutHandle);
        db.releaseLock(lockKey);
-       cleanupTempFile(task.tempFilePath);
-       activeWorkers--;
-       processWorkerQueue();
+       cleanupTempFile(tempFilePath);
    };
 
-   const timeoutHandle = setTimeout(() => {
-       socket.emit('err', "Processing timed out.");
-       worker.terminate();
-       finishWorker();
-   }, WORKER_TIMEOUT_MS);
+   const workerPayload = {
+       labConfig: labConfigForWorker(targetLab),
+       maxXmlMb,
+       retainXml,
+   };
+   if (fileBuffer) workerPayload.fileBuffer = fileBuffer;
+   if (tempFilePath) workerPayload.tempFilePath = tempFilePath;
 
-   worker.on('message', (msg) => {
-       if (msg.type === 'progress') socket.emit('progress', msg);
-       else if (msg.type === 'file_verified') socket.emit('file_verified');
-       else if (msg.type === 'result') {
-           clearTimeout(timeoutHandle);
-           try {
-               const { grading } = msg;
-               const timestamp = Date.now();
-               const capturesDir = path.join(__dirname, '../captures');
+   graderPool.enqueue(
+       workerPayload,
+       transferList,
+       (msg) => {
+           if (msg.type === 'progress') socket.emit('progress', msg);
+           else if (msg.type === 'file_verified') socket.emit('file_verified');
+           else if (msg.type === 'result') {
+               if (finished) return;
+               try {
+                   const { grading } = msg;
+                   const timestamp = Date.now();
+                   const capturesDir = path.join(__dirname, '../captures');
 
-               if (inProgressId) {
-                   db.prepare("UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ?")
-                       .run(grading.total, grading.max, JSON.stringify(grading.serverBreakdown), inProgressId);
-               } else {
-                   db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-                       .run(socketUser.id, socketUser.unique_id, targetLab.id, grading.total, grading.max, JSON.stringify(grading.serverBreakdown), 'lab', 'completed');
-               }
-
-               if (process.env.RETAIN_PKA === 'true' || process.env.RETAIN_XML === 'true') {
-                   if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
-                   const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
-                   const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
-                   if (process.env.RETAIN_PKA === 'true' && fs.existsSync(task.tempFilePath)) {
-                       fs.copyFileSync(task.tempFilePath, path.join(capturesDir, `${baseName}.pka`));
-                       fs.copyFileSync(task.tempFilePath, path.join(capturesDir, `${baseName}.pkt`));
+                   if (inProgressId) {
+                       db.prepare("UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ?")
+                           .run(grading.total, grading.max, JSON.stringify(grading.serverBreakdown), inProgressId);
+                   } else {
+                       db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+                           .run(socketUser.id, socketUser.unique_id, targetLab.id, grading.total, grading.max, JSON.stringify(grading.serverBreakdown), 'lab', 'completed');
                    }
-                   if (process.env.RETAIN_XML === 'true') fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
+
+                   if (process.env.RETAIN_PKA === 'true' || retainXml) {
+                       if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
+                       const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
+                       const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
+                       if (process.env.RETAIN_PKA === 'true' && tempFilePath && fs.existsSync(tempFilePath)) {
+                           fs.copyFileSync(tempFilePath, path.join(capturesDir, `${baseName}.pka`));
+                           fs.copyFileSync(tempFilePath, path.join(capturesDir, `${baseName}.pkt`));
+                       }
+                       if (retainXml && msg.xml) {
+                           fs.writeFileSync(path.join(capturesDir, `${baseName}.xml`), msg.xml);
+                       }
+                   }
+
+                   const payload = {
+                       total: grading.total, max: grading.max, clientBreakdown: grading.clientBreakdown, show_score: grading.show_score
+                   };
+
+                   if (!grading.show_score) { delete payload.total; delete payload.max; }
+
+                   socket.emit('result', payload);
+               } catch (e) {
+                   socket.emit('err', "An internal processing error occurred.");
+               } finally {
+                   finishTask();
                }
-
-               const payload = {
-                   total: grading.total, max: grading.max, clientBreakdown: grading.clientBreakdown, show_score: grading.show_score
-               };
-
-               if (!grading.show_score) { delete payload.total; delete payload.max; }
-
-               socket.emit('result', payload);
-           } catch (e) {
-               socket.emit('err', "An internal processing error occurred.");
-           } finally {
-               worker.terminate();
-               finishWorker();
+           } else if (msg.type === 'error') {
+               socket.emit('err', msg.msg);
+               finishTask();
            }
-       } else if (msg.type === 'error') {
-           clearTimeout(timeoutHandle);
-           socket.emit('err', msg.msg);
-           worker.terminate();
-           finishWorker();
+       },
+       (errMsg) => {
+           socket.emit('err', errMsg);
+           finishTask();
        }
-   });
-   
-   worker.on('error', (e) => {
-       clearTimeout(timeoutHandle);
-       socket.emit('err', "An internal processing error occurred.");
-       worker.terminate();
-       finishWorker();
-   });
-
-   worker.on('exit', (code) => {
-       finishWorker();
-   });
+   );
 }
 
 // Sweepers
@@ -407,7 +438,7 @@ io.on('connection', (socket) => {
 
        let tempFilePath; // Lifted outside `try` block to prevent ReferenceError (TDZ issue)
        try {
-           if (workerQueue.length >= MAX_QUEUE_DEPTH) {
+           if (graderPool.getPendingCount() >= MAX_QUEUE_DEPTH) {
                db.releaseLock(lockKey);
                return socket.emit('err', "Server is busy. Please try again in a moment.");
            }
@@ -436,23 +467,38 @@ io.on('connection', (socket) => {
 
            const maxXmlMb = targetLab.max_xml_output_mb || 20;
 
-           const tmpDir = os.tmpdir();
-           tempFilePath = path.join(tmpDir, `csss_${crypto.randomBytes(16).toString('hex')}.tmp`);
-           
-           fs.writeFile(tempFilePath, Buffer.from(fileData), (writeErr) => {
-               if (writeErr) {
-                   db.releaseLock(lockKey);
-                   return socket.emit('err', "An internal error occurred while saving the file.");
-               }
+           const retainPka = process.env.RETAIN_PKA === 'true';
+           const fileBuffer = Buffer.from(fileData);
 
-               workerQueue.push({
-                   socket,
-                   workerData: { tempFilePath, configData: getRawConfig(), labId, maxXmlMb },
-                   tempFilePath,
-                   lockKey, socketUser, targetLab, inProgressId
+           const task = {
+               socket,
+               lockKey,
+               socketUser,
+               targetLab,
+               inProgressId,
+               maxXmlMb,
+               tempFilePath: null,
+               fileBuffer: null,
+               transferList: [],
+           };
+
+           if (retainPka) {
+               const tmpDir = os.tmpdir();
+               tempFilePath = path.join(tmpDir, `csss_${crypto.randomBytes(16).toString('hex')}.tmp`);
+               task.tempFilePath = tempFilePath;
+
+               fs.writeFile(tempFilePath, fileBuffer, (writeErr) => {
+                   if (writeErr) {
+                       db.releaseLock(lockKey);
+                       return socket.emit('err', "An internal error occurred while saving the file.");
+                   }
+                   dispatchGradingTask(task);
                });
-               processWorkerQueue();
-           });
+           } else {
+               task.fileBuffer = fileBuffer;
+               task.transferList = [fileBuffer.buffer];
+               dispatchGradingTask(task);
+           }
 
        } catch (err) {
            db.releaseLock(lockKey);

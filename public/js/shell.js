@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { applyBranding, closeModal } from './utils.js';
+import { applyBranding, closeModal, fetchCsrfToken } from './utils.js';
 import { renderNav } from './nav.js';
 import { logout, clearBootstrapCache } from './auth.js';
 import { renderChallengesList } from './challenges.js';
@@ -20,7 +20,8 @@ function readBootstrapCache() {
 }
 
 export function writeBootstrapCache(data) {
-    sessionStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), data }));
+    const { csrfToken: _csrf, ...cacheable } = data;
+    sessionStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), data: cacheable }));
 }
 
 function applyBootstrap(data, activePage) {
@@ -49,13 +50,11 @@ function connectSocket(uid) {
 }
 
 async function fetchBootstrapFallback() {
-    const [csrfRes, meRes, cfgRes] = await Promise.all([
-        fetch('/api/csrf-token'),
-        fetch('/api/me'),
-        fetch('/api/config'),
+    const [meRes, cfgRes] = await Promise.all([
+        fetch('/api/me', { credentials: 'same-origin' }),
+        fetch('/api/config', { credentials: 'same-origin' }),
     ]);
     if (meRes.status === 401) return { unauthorized: true };
-    const csrfData = await csrfRes.json();
     const meData = await meRes.json();
     const cfgData = await cfgRes.json();
     return {
@@ -64,14 +63,13 @@ async function fetchBootstrapFallback() {
             unique_id: meData.unique_id,
             is_admin: meData.is_admin,
         },
-        csrfToken: csrfData.csrfToken,
         challenges: cfgData.challenges || [],
         options: cfgData.options || {},
     };
 }
 
 async function fetchBootstrapData() {
-    const res = await fetch('/api/bootstrap');
+    const res = await fetch('/api/bootstrap', { credentials: 'same-origin' });
     if (res.ok) return res.json();
     if (res.status === 401) return { unauthorized: true };
     if (res.status === 404) return fetchBootstrapFallback();
@@ -87,7 +85,7 @@ export async function initShell(activePage, { connectSocket: useSocket = false }
         data = await fetchBootstrapData();
         if (data.unauthorized) {
             clearBootstrapCache();
-            location.href = '/index.html';
+            location.href = '/';
             return false;
         }
         writeBootstrapCache(data);
@@ -95,6 +93,8 @@ export async function initShell(activePage, { connectSocket: useSocket = false }
     } catch {
         if (!data) return false;
     }
+
+    await fetchCsrfToken();
 
     if (useSocket && data.user?.unique_id) connectSocket(data.user.unique_id);
 

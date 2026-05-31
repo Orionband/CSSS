@@ -241,7 +241,7 @@ async function resetPassword() {
   const rounds = 10;
   const hash = bcrypt.hashSync(pw, rounds);
   backupDb();
-  const info = db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, user.id);
+  const info = db.prepare('UPDATE users SET password = ?, password_changed_at = ? WHERE id = ?').run(hash, Date.now(), user.id);
   console.log(`Password updated. Rows affected: ${info.changes}`);
   invalidateUserSessions(user.id);
 }

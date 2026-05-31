@@ -10,20 +10,23 @@ export function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
-export async function securePost(url, body = {}, method = 'POST') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (state.csrfToken) headers['X-CSRF-Token'] = state.csrfToken;
-    return fetch(url, { method, headers, body: JSON.stringify(body) });
-}
-
 export async function fetchCsrfToken() {
     try {
-        const res = await fetch('/api/csrf-token');
+        const res = await fetch('/api/csrf-token', { credentials: 'same-origin' });
         const data = await res.json();
         if (data.csrfToken) state.csrfToken = data.csrfToken;
+        else state.csrfToken = null;
     } catch {
         console.error('Failed to fetch CSRF token');
+        state.csrfToken = null;
     }
+}
+
+export async function securePost(url, body = {}, method = 'POST') {
+    if (!state.csrfToken) await fetchCsrfToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (state.csrfToken) headers['X-CSRF-Token'] = state.csrfToken;
+    return fetch(url, { method, headers, credentials: 'same-origin', body: JSON.stringify(body) });
 }
 
 export function applyBranding(options) {
