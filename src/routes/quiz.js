@@ -2,22 +2,59 @@ const express = require('express');
  const path = require('path');
  const fs = require('fs');
  const crypto = require('crypto');
- const db = require('../database');
- const { getConfig, isWindowOpen } = require('../config');
+const db = require('../database');
+const { elapsedSecondsSince } = require('../submissionDuration');
+const { getConfig, isWindowOpen } = require('../config');
  const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
 const rateLimit = require('express-rate-limit');
+const { rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
 const router = express.Router();
 
-const quizSubmitLimiter = rateLimit({
+const quizSubmitLimiter = rateLimit(rateLimitPreset({
     windowMs: 60 * 1000,
     max: 5,
-    standardHeaders: true,
-    legacyHeaders: false,
     message: { error: "Too many quiz submissions. Please wait before trying again." },
-});
+}));
+
+const quizStartLimiter = rateLimit(rateLimitPreset({
+    windowMs: 60 * 1000,
+    max: 10,
+    message: { error: "Too many quiz starts. Please wait before trying again." },
+}));
+
+const quizAssetLimiter = rateLimit(rateLimitPreset({
+    windowMs: 60 * 1000,
+    max: 10,
+    message: { error: "Too many asset downloads. Please wait before trying again." },
+}));
+
+const quizLimiter = rateLimit(rateLimitPreset({
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { error: "Too many requests. Please wait before trying again." },
+}));
+
+function clearQuizMappings(req, quizId) {
+    if (req.session?.quizMappings?.[quizId]) {
+        delete req.session.quizMappings[quizId];
+        if (Object.keys(req.session.quizMappings).length === 0) delete req.session.quizMappings;
+        req.session.save(() => {});
+    }
+    if (req.session?.userId) {
+        db.clearQuizMappingsForUser(req.session.userId, quizId);
+    }
+}
 
 function safeObject() {
     return Object.create(null);
+}
+
+function answerIndexForOpaqueId(mappings, questionIdx, opaqueId, answerCount) {
+    const sid = String(opaqueId);
+    for (let ai = 0; ai < answerCount; ai++) {
+        if (mappings && mappings[`${questionIdx}_${ai}`] === sid) return ai;
+    }
+    return -1;
 }
 
 function shuffle(array) {
@@ -48,28 +85,40 @@ setInterval(() => {
 
         inProgress.forEach(sub => {
             const qCfg = quizzes.find(q => q.id === sub.lab_id);
-            if (qCfg) {
-                let closeSession = false;
-                let reason = "";
+            if (!qCfg) return;
 
-                if (qCfg.time_limit_minutes > 0) {
-                    const startTime = parseDbTime(sub.timestamp);
-                    const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
-                    if (elapsedSeconds > (qCfg.time_limit_minutes * 60) + 2) {
-                        closeSession = true;
-                        reason = "Auto-closed: Time limit expired.";
-                    }
-                }
+            let closeSession = false;
+            let reason = "";
+            const timeLimitMinutes = getConfigNumber(qCfg.time_limit_minutes, 0);
 
-                if (!isWindowOpen(qCfg)) {
+            if (timeLimitMinutes > 0) {
+                const startTime = parseDbTime(sub.timestamp);
+                const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                if (elapsedSeconds > (timeLimitMinutes * 60) + 2) {
                     closeSession = true;
-                    reason = "Auto-closed: Competition window ended.";
+                    reason = "Auto-closed: Time limit expired.";
                 }
+            }
 
-                if (closeSession) {
-                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
-                      .run(JSON.stringify([{message: reason, correct: false}]), sub.id);
-                }
+            if (!isWindowOpen(qCfg)) {
+                closeSession = true;
+                reason = "Auto-closed: Competition window ended.";
+            }
+
+            if (!closeSession) return;
+
+            const lockKey = `quiz_${sub.user_id}_${sub.lab_id}`;
+            if (!db.acquireLock(lockKey)) {
+                return;
+            }
+
+            try {
+                const durationSeconds = elapsedSecondsSince(sub.timestamp);
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
+                  .run(JSON.stringify([{message: reason, correct: false}]), durationSeconds, sub.id);
+                db.clearQuizMappingsForUser(sub.user_id, sub.lab_id);
+            } finally {
+                db.releaseLock(lockKey);
             }
         });
     } catch (e) {
@@ -77,38 +126,46 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
-router.get('/asset/:type/:filename', (req, res) => {
+router.get('/asset/:type/:filename', quizAssetLimiter, (req, res) => {
     if (!req.session.userId) return res.status(401).send("Unauthorized");
     
     const type = req.params.type;
     if (type !== 'image' && type !== 'pka' && type !== 'pkt') return res.status(400).send("Invalid asset type");
 
-    const safeFilename = path.basename(req.params.filename);
-    
-    if (/[/\\:\0]/.test(safeFilename) || safeFilename.startsWith('.')) {
+    const rawFilename = req.params.filename;
+    if (!/^[A-Za-z0-9._-]+$/.test(rawFilename) || rawFilename.startsWith('.')) {
         return res.status(400).send("Invalid filename.");
     }
+    const safeFilename = rawFilename;
     
     const cfg = getConfig();
     let isFileAllowed = false;
     let allowingQuiz = null;
     const quizzes = cfg.quizzes || [];
-    
+
+    const candidateQuizIds = [];
+    const candidateQuizMap = new Map();
     for (const q of quizzes) {
         let containsAsset = false;
-        for (const question of (q.questions || [])) {
+        for (const question of ensureArray(q.questions)) {
             if (type === 'image' && question.image === safeFilename) containsAsset = true;
             if (type === 'pka' && question.pka === safeFilename) containsAsset = true;
         }
-
         if (!containsAsset) continue;
+        candidateQuizIds.push(q.id);
+        candidateQuizMap.set(q.id, q);
+    }
 
-        const activeSession = db.prepare("SELECT id FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz'")
-            .get(req.session.userId, q.id);
-        
-        if (activeSession) {
+    if (candidateQuizIds.length > 0) {
+        const placeholders = candidateQuizIds.map(() => '?').join(',');
+        const activeRows = db.prepare(
+            `SELECT lab_id FROM submissions WHERE user_id = ? AND lab_id IN (${placeholders}) AND status = 'in_progress' AND type = 'quiz'`
+        ).all(req.session.userId, ...candidateQuizIds);
+        const activeLabIds = new Set(activeRows.map((r) => r.lab_id));
+        for (const labId of candidateQuizIds) {
+            if (!activeLabIds.has(labId)) continue;
             isFileAllowed = true;
-            allowingQuiz = q;
+            allowingQuiz = candidateQuizMap.get(labId);
             break;
         }
     }
@@ -138,14 +195,14 @@ router.get('/asset/:type/:filename', (req, res) => {
     }
 
     if (!assetPath.startsWith(baseDir + path.sep) && assetPath !== baseDir) {
-        return res.status(403).send("Forbidden.");
+        return res.status(404).send("File not found.");
     }
 
     try {
         // statSync (not lstatSync) — realpathSync already resolved any symlinks above
         const stats = fs.statSync(assetPath);
         if (!stats.isFile()) {
-            return res.status(404).send("Not found.");
+            return res.status(404).send("File not found.");
         }
     } catch (e) {
         return res.status(404).send("File not found.");
@@ -155,7 +212,7 @@ router.get('/asset/:type/:filename', (req, res) => {
     else res.sendFile(assetPath);
 });
 
-router.get('/:id', (req, res) => {
+router.get('/:id', quizLimiter, (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
     const cfg = getConfig();
@@ -167,7 +224,7 @@ router.get('/:id', (req, res) => {
     // the quiz exists, but without attempt counts or session details that are only
     // relevant once the window is active or after it closes.
     if (!isWindowOpen(quiz)) {
-        return res.json({ id: quiz.id, title: quiz.title, window_open: false });
+        return res.json({ id: quiz.id, window_open: false });
     }
 
     let attemptsTaken = 0;
@@ -178,17 +235,20 @@ router.get('/:id', (req, res) => {
     let sessionActive = false;
     let timeRemaining = null;
     const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
+    const timeLimitMinutes = getConfigNumber(quiz.time_limit_minutes, 0);
 
     if (existingInProgress) {
         sessionActive = true;
-        if (quiz.time_limit_minutes > 0) {
+        if (timeLimitMinutes > 0) {
             const startTime = parseDbTime(existingInProgress.timestamp);
             const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
-            timeRemaining = Math.max(0, (quiz.time_limit_minutes * 60) - elapsedSeconds);
+            timeRemaining = Math.max(0, (timeLimitMinutes * 60) - elapsedSeconds);
 
             if (timeRemaining <= 0) {
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
-                  .run(JSON.stringify([{message: "Time expired", correct: false}]), existingInProgress.id);
+                const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                  .run(JSON.stringify([{message: "Time expired", correct: false}]), durationSeconds, existingInProgress.id);
+                clearQuizMappings(req, quiz.id);
                 sessionActive = false;
                 timeRemaining = null;
             }
@@ -198,16 +258,16 @@ router.get('/:id', (req, res) => {
     res.json({
         id: quiz.id,
         title: quiz.title,
-        time_limit: quiz.time_limit_minutes,
-        max_attempts: quiz.max_attempts || 0,
+        time_limit: getConfigNumber(quiz.time_limit_minutes, 0),
+        max_attempts: getConfigNumber(quiz.max_attempts, 0),
         attempts_taken: attemptsTaken,
-        question_count: quiz.questions.length,
+        question_count: ensureArray(quiz.questions).length,
         session_active: sessionActive,
         time_remaining_seconds: timeRemaining
     });
 });
 
-router.post('/:id/start', (req, res) => {
+router.post('/:id/start', quizStartLimiter, (req, res) => {
     if (!req.session.userId) return res.status(401).json({ error: "Unauthorized" });
 
     const cfg = getConfig();
@@ -218,72 +278,113 @@ router.post('/:id/start', (req, res) => {
         return res.status(403).json({ error: "Quiz is currently closed outside of the competition window." });
     }
 
-    let timeRemaining = quiz.time_limit_minutes * 60;
+    const timeLimitMinutes = getConfigNumber(quiz.time_limit_minutes, 0);
+    let timeRemaining = timeLimitMinutes * 60;
+    const maxAttempts = getConfigNumber(quiz.max_attempts, 0);
+    const rateLimitCount = getConfigNumber(quiz.rate_limit_count, 0);
+    const rateLimitWindow = getConfigNumber(quiz.rate_limit_window_seconds, 60);
 
     const startQuiz = db.transaction(() => {
         const existingInProgress = db.prepare("SELECT * FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz' ORDER BY id DESC LIMIT 1").get(req.session.userId, quiz.id);
 
         if (existingInProgress) {
-            if (quiz.time_limit_minutes > 0) {
+            if (timeLimitMinutes > 0) {
                 const startTime = parseDbTime(existingInProgress.timestamp);
                 const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
                 timeRemaining = Math.max(0, timeRemaining - elapsedSeconds);
 
                 if (timeRemaining <= 0) {
-                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
-                      .run(JSON.stringify([{message: "Time expired", correct: false}]), existingInProgress.id);
-                    return { error: "Time limit expired for this attempt.", code: 403 };
+                    const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                      .run(JSON.stringify([{message: "Time expired", correct: false}]), durationSeconds, existingInProgress.id);
+                    return { error: "Time limit expired for this attempt.", code: 403, clearMappings: true };
                 }
             }
-        } else {
-            const rateLimitCount = quiz.rate_limit_count || 0;
-            const rateLimitWindow = quiz.rate_limit_window_seconds || 60;
-            
-            if (rateLimitCount > 0) {
-                const recent = db.prepare("SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')").get(req.session.userId, quiz.id, rateLimitWindow).c;
-                if (recent >= rateLimitCount) {
-                    return { error: "Rate limit exceeded. Please wait before starting another attempt.", code: 429 };
-                }
-            }
+            return { success: true };
+        }
 
-            if (quiz.max_attempts > 0) {
-                const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
-                if (attempts >= quiz.max_attempts) return { error: "Maximum attempts reached.", code: 403 };
+        let sql = "INSERT INTO submissions (user_id, unique_id, lab_id, status, type) " +
+            "SELECT ?, ?, ?, 'in_progress', 'quiz' " +
+            "WHERE NOT EXISTS (SELECT 1 FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz')";
+        const params = [req.session.userId, req.session.uniqueId, quiz.id, req.session.userId, quiz.id];
+        if (maxAttempts > 0) {
+            sql += " AND (SELECT COUNT(*) FROM submissions WHERE user_id = ? AND lab_id = ?) < ?";
+            params.push(req.session.userId, quiz.id, maxAttempts);
+        }
+        if (rateLimitCount > 0) {
+            sql += " AND (SELECT COUNT(*) FROM submissions WHERE user_id = ? AND lab_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')) < ?";
+            params.push(req.session.userId, quiz.id, rateLimitWindow, rateLimitCount);
+        }
+        const result = db.prepare(sql).run(...params);
+        if (result.changes === 0) {
+            const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
+            if (maxAttempts > 0 && attempts >= maxAttempts) {
+                return { error: "Maximum attempts reached.", code: 403 };
             }
-            
-            db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'quiz')")
-              .run(req.session.userId, req.session.uniqueId, quiz.id);
+            if (rateLimitCount > 0) {
+                return { error: "Rate limit exceeded. Please wait before starting another attempt.", code: 429 };
+            }
+            return { error: "An active quiz session already exists.", code: 409 };
         }
         return { success: true };
     });
 
     try {
         const result = startQuiz();
-        if (result.error) return res.status(result.code).json({ error: result.error });
+        if (result.error) {
+            if (result.clearMappings) clearQuizMappings(req, quiz.id);
+            return res.status(result.code).json({ error: result.error });
+        }
     } catch (e) {
         return res.status(500).json({ error: "An internal error occurred." });
     }
 
-    const matchingMappings = {};
-        const safeQuestions = quiz.questions.map((q, idx) => {
-          const base = { id: idx, text: q.text, type: q.type, image: q.image, pka: q.pka, points: q.points !== undefined ? parseInt(q.points) : 1 };
-          if (q.type === 'radio' || q.type === 'checkbox') {
-            base.answers = q.answers.map((a, aIdx) => ({ id: aIdx, text: a.text }));
-          } else if (q.type === 'matching') {
-            const rightOptions = q.pairs.map((p, pIdx) => {
-              const opaqueId = crypto.randomBytes(8).toString('hex');
-              matchingMappings[`${idx}_${pIdx}`] = opaqueId;
-              return { id: opaqueId, text: p.right };
+    const quizMappings = {};
+    const safeQuestions = ensureArray(quiz.questions).map((q, idx) => {
+        const qType = String(q.type || '');
+        if (!['radio', 'checkbox', 'text', 'matching'].includes(qType)) {
+            console.warn(`Skipping question ${idx} with invalid type: ${qType}`);
+            return null;
+        }
+        const base = { id: idx, text: String(q.text || ''), type: qType, image: q.image || null, pka: q.pka || null, points: q.points !== undefined ? parseInt(q.points) : 1 };
+        if (qType === 'radio' || qType === 'checkbox') {
+            if (!Array.isArray(q.answers)) {
+                console.warn(`Skipping question ${idx}: answers must be an array`);
+                return null;
+            }
+            base.answers = q.answers.map((a, aIdx) => {
+                const opaqueId = crypto.randomBytes(8).toString('hex');
+                quizMappings[`${idx}_${aIdx}`] = opaqueId;
+                return { id: opaqueId, text: String(a.text || '') };
             });
-            base.leftItems = q.pairs.map((p, pIdx) => ({ id: pIdx, text: p.left }));
+        } else if (qType === 'matching') {
+            if (!Array.isArray(q.pairs)) {
+                console.warn(`Skipping question ${idx}: pairs must be an array`);
+                return null;
+            }
+            const rightOptions = q.pairs.map((p, pIdx) => {
+                const opaqueId = crypto.randomBytes(8).toString('hex');
+                quizMappings[`${idx}_${pIdx}`] = opaqueId;
+                return { id: opaqueId, text: String(p.right || '') };
+            });
+            base.leftItems = q.pairs.map((p, pIdx) => ({ id: pIdx, text: String(p.left || '') }));
             base.rightOptions = shuffle(rightOptions);
-          }
-          return base;
-        });
-        if (!req.session.quizMappings) req.session.quizMappings = {};
-        req.session.quizMappings[quiz.id] = matchingMappings;
-        req.session.save(() => {});
+        } else if (qType === 'text') {
+            if (!q.regex) {
+                console.warn(`Skipping question ${idx}: regex is required for text questions`);
+                return null;
+            }
+        }
+        return base;
+    }).filter((q) => q !== null);
+    if (!req.session.quizMappings) req.session.quizMappings = {};
+    req.session.quizMappings[quiz.id] = quizMappings;
+    req.session.save((saveErr) => {
+        if (saveErr) {
+            console.error('Failed to save quiz mappings to session:', saveErr.message);
+        }
         res.json({ questions: safeQuestions, time_remaining_seconds: timeRemaining });
+    });
 });
 
 router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
@@ -309,13 +410,15 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
             return res.status(403).json({ error: "No active quiz session found." });
         }
 
-        if (quiz.time_limit_minutes > 0) {
+        const submitTimeLimitMinutes = getConfigNumber(quiz.time_limit_minutes, 0);
+        if (submitTimeLimitMinutes > 0) {
             const startTime = parseDbTime(existingInProgress.timestamp);
             const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
             
-            if (elapsedSeconds > (quiz.time_limit_minutes * 60) + 2) {
-                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ? WHERE id = ?")
-                      .run(JSON.stringify([{message: "Submission rejected: Time limit expired.", correct: false}]), existingInProgress.id);
+            if (elapsedSeconds > (submitTimeLimitMinutes * 60) + 2) {
+                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                      .run(JSON.stringify([{message: "Submission rejected: Time limit expired.", correct: false}]), elapsedSeconds, existingInProgress.id);
+                 clearQuizMappings(req, quiz.id);
                  return res.status(403).json({ error: "Time limit expired." });
             }
         }
@@ -323,8 +426,9 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
         const rawAnswers = req.body.answers;
         const userAnswers = safeObject();
         
+        const questions = ensureArray(quiz.questions);
         if (rawAnswers && typeof rawAnswers === 'object' && !Array.isArray(rawAnswers)) {
-            for (let i = 0; i < quiz.questions.length; i++) {
+            for (let i = 0; i < questions.length; i++) {
                 const key = String(i);
                 if (key in rawAnswers) {
                     userAnswers[key] = rawAnswers[key];
@@ -337,19 +441,25 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
         const breakdown = [];
         const showMissed = quiz.show_missed_points === true;
 
-        quiz.questions.forEach((q, idx) => {
+        const mappings = req.session.quizMappings && req.session.quizMappings[quiz.id];
+
+        questions.forEach((q, idx) => {
             const input = userAnswers[String(idx)];
             let isCorrect = false;
 
             if (q.type === 'radio') {
                 if (typeof input !== 'undefined' && input !== null) {
-                    const ansId = parseInt(input);
-                    if (!isNaN(ansId) && ansId >= 0 && ansId < q.answers.length && q.answers[ansId] && q.answers[ansId].correct) isCorrect = true;
+                    const ansIdx = answerIndexForOpaqueId(mappings, idx, input, q.answers.length);
+                    if (ansIdx >= 0 && q.answers[ansIdx] && q.answers[ansIdx].correct) isCorrect = true;
                 }
             } 
             else if (q.type === 'checkbox') {
                 if (Array.isArray(input)) {
-                    const selected = input.map(i => parseInt(i)).filter(i => !isNaN(i) && i >= 0 && i < q.answers.length).sort().toString();
+                    const selected = input
+                        .map((i) => answerIndexForOpaqueId(mappings, idx, i, q.answers.length))
+                        .filter((i) => i >= 0)
+                        .sort()
+                        .toString();
                     const correctIndices = q.answers.map((a, i) => a.correct ? i : -1).filter(i => i !== -1).sort().toString();
                     if (selected === correctIndices) isCorrect = true;
                 }
@@ -404,8 +514,13 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
             }
         });
 
-        db.prepare("UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ?")
-          .run(score, maxScore, JSON.stringify(breakdown), existingInProgress.id);
+        const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
+        const updateResult = db.prepare(
+            "UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed', duration_seconds = ? WHERE id = ? AND status = 'in_progress'"
+        ).run(score, maxScore, JSON.stringify(breakdown), durationSeconds, existingInProgress.id);
+        if (updateResult.changes === 0) {
+            return res.status(403).json({ error: 'Quiz session ended before your submission was recorded.' });
+        }
 
         const showScore = quiz.show_score !== false;
         const showCorrections = quiz.show_corrections !== false;
@@ -418,10 +533,7 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
         });
     } finally {
         db.releaseLock(lockKey);
-        if (req.session.quizMappings && req.session.quizMappings[quiz.id]) {
-            delete req.session.quizMappings[quiz.id];
-            req.session.save(() => {});
-        }
+        clearQuizMappings(req, quiz.id);
     }
 });
 

@@ -4,6 +4,11 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const db = require('../database');
+const { sanitizeUsername, sanitizeEmail, MAX_FIELD_LEN } = require('../sanitizeUserFields');
+const { validatePasswordPolicy } = require('../passwordPolicy');
+const { parsePagination, MAX_LEADERBOARD, rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
+const { buildLeaderboard } = require('../leaderboardScores');
+const { elapsedSecondsSince } = require('../submissionDuration');
 const { getConfig, isWindowOpen } = require('../config');
 const router = express.Router();
 const { customAlphabet } = require('nanoid');
@@ -18,12 +23,23 @@ function generateUniqueId() {
 
 const DUMMY_HASH = bcrypt.hashSync('__dummy_timing_safe_value_never_matches__', 10);
 
-const registerLimiter = rateLimit({ windowMs: 24*60*60*1000, max: 10, standardHeaders: true, legacyHeaders: false });
-const loginLimiter = rateLimit({ windowMs: 5*60*1000, max: 5, standardHeaders: true, legacyHeaders: false });
-const csrfLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
-const leaderboardLimiter = rateLimit({ windowMs: 10 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
-const labStartLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
-const downloadLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const registerLimiter = rateLimit(rateLimitPreset({ windowMs: 24 * 60 * 60 * 1000, max: 10 }));
+const loginLimiter = rateLimit(rateLimitPreset({ windowMs: 5 * 60 * 1000, max: 5 }));
+const csrfLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const leaderboardLimiter = rateLimit(rateLimitPreset({ windowMs: 10 * 1000, max: 5 }));
+const historyLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const labInfoLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const labStartLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 10 }));
+const downloadLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 10 }));
+const configLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const bootstrapLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const meLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+
+function envBool(name, defaultValue = false) {
+    const val = process.env[name];
+    if (val === undefined || val === null || String(val).trim() === '') return defaultValue;
+    return String(val).trim().toLowerCase() === 'true';
+}
 
 function ensureCsrfToken(req) {
     if (!req.session) return null;
@@ -39,20 +55,8 @@ router.get('/csrf-token', csrfLimiter, (req, res) => {
 });
 
 router.post('/register', registerLimiter, async (req, res) => {
-    if (process.env.ALLOW_REGISTRATION === 'false') {
+    if (!envBool('ALLOW_REGISTRATION', false)) {
         return res.status(403).json({ error: "Registration is currently disabled by the administrator." });
-    }
-
-    const cfg = getConfig();
-    const allChallenges = [...(cfg.labs || []), ...(cfg.quizzes || [])];
-    
-    let anyOpen = allChallenges.length === 0;
-    for (const c of allChallenges) {
-        if (isWindowOpen(c)) { anyOpen = true; break; }
-    }
-    
-    if (!anyOpen) {
-        return res.status(403).json({ error: "Registration is currently closed outside of the competition window." });
     }
 
     const { username, email, password } = req.body;
@@ -62,21 +66,16 @@ router.post('/register', registerLimiter, async (req, res) => {
     }
     
     const pwd = String(password);
-    const userStr = String(username);
-    const emailStr = String(email);
+    const userStr = sanitizeUsername(username);
+    const emailStr = sanitizeEmail(email);
 
-    if (userStr.length > 100 || emailStr.length > 100 || pwd.length > 100) {
-        return res.status(400).json({ error: "Fields must be 100 characters or less." });
+    if (!userStr || !emailStr) {
+        return res.status(400).json({ error: "Invalid username or email. Use ASCII letters, numbers, and . _ - for usernames." });
     }
-    
-    if (pwd.length < 8) {
-        return res.status(400).json({ error: "Password must be at least 8 characters." });
-    }
-    if (!/[A-Z]/.test(pwd)) {
-        return res.status(400).json({ error: "Password must contain at least one uppercase letter." });
-    }
-    if (!/[0-9]/.test(pwd)) {
-        return res.status(400).json({ error: "Password must contain at least one number." });
+
+    const pwdCheck = validatePasswordPolicy(pwd);
+    if (!pwdCheck.ok) {
+        return res.status(400).json({ error: pwdCheck.error });
     }
 
     try {
@@ -117,7 +116,10 @@ router.post('/logout', (req, res) => {
 router.post('/login', loginLimiter, async (req, res) => {
     try {
         const { username, password } = req.body;
-        const userStr = String(username ?? "");
+        const userStr = sanitizeUsername(username);
+        if (!userStr) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
         const user = db.prepare('SELECT * FROM users WHERE username = ?').get(userStr);
         const hashToCompare = user ? user.password : DUMMY_HASH;
         
@@ -147,18 +149,23 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 });
 
-router.get('/me', (req, res) => {
+router.get('/me', meLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
-    res.json({ id: req.session.userId, unique_id: req.session.uniqueId, is_admin: user && user.is_admin === 1 });
+    const user = db.prepare('SELECT is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
+    res.json({
+        id: req.session.userId,
+        unique_id: req.session.uniqueId,
+        is_admin: user && user.is_admin === 1,
+        is_owner: user && user.is_owner === 1,
+    });
 });
 
 function appOptions() {
     const fullTitle = process.env.APP_TITLE || 'CSSS ENGINE';
     const parts = fullTitle.split(' ');
     return {
-        show_leaderboard: process.env.SHOW_LEADERBOARD === 'true',
-        show_history: process.env.SHOW_HISTORY === 'true',
+        show_leaderboard: envBool('SHOW_LEADERBOARD'),
+        show_history: envBool('SHOW_HISTORY'),
         app_title: fullTitle,
         app_title_main: parts[0] || '',
         app_title_highlight: parts.slice(1).join(' ') || '',
@@ -166,14 +173,14 @@ function appOptions() {
 }
 
 function labMaxPoints(lab) {
-    return (lab.checks || []).reduce((sum, c) => {
+    return ensureArray(lab.checks).reduce((sum, c) => {
         const p = parseInt(c.points, 10);
         return sum + (Number.isFinite(p) && p > 0 ? p : 0);
     }, 0);
 }
 
 function quizMaxPoints(quiz) {
-    return (quiz.questions || []).reduce((sum, q) => {
+    return ensureArray(quiz.questions).reduce((sum, q) => {
         const p = q.points !== undefined ? parseInt(q.points, 10) : 1;
         return sum + (Number.isFinite(p) && p > 0 ? p : 0);
     }, 0);
@@ -197,7 +204,7 @@ function buildChallengeList(cfg) {
     return [...safeLabs, ...safeQuizzes];
 }
 
-router.get('/config', (req, res) => {
+router.get('/config', configLimiter, (req, res) => {
     const cfg = getConfig();
     const isAuthenticated = req.session && req.session.userId;
     res.json({
@@ -206,12 +213,12 @@ router.get('/config', (req, res) => {
     });
 });
 
-router.get('/bootstrap', (req, res) => {
+router.get('/bootstrap', bootstrapLimiter, (req, res) => {
     if (!req.session || !req.session.userId) {
         return res.status(401).json({ error: 'Not logged in' });
     }
 
-    const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
     const cfg = getConfig();
 
     res.json({
@@ -219,6 +226,7 @@ router.get('/bootstrap', (req, res) => {
             id: req.session.userId,
             unique_id: req.session.uniqueId,
             is_admin: user && user.is_admin === 1,
+            is_owner: user && user.is_owner === 1,
         },
         csrfToken: ensureCsrfToken(req),
         challenges: buildChallengeList(cfg),
@@ -226,12 +234,14 @@ router.get('/bootstrap', (req, res) => {
     });
 });
 
-router.get('/lab/:id', (req, res) => {
+router.get('/lab/:id', labInfoLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
     
     const cfg = getConfig();
     const lab = (cfg.labs || []).find(l => l.id === req.params.id);
-    if (!lab) return res.status(404).json({ error: "Lab not found." });
+    if (!lab || !isWindowOpen(lab)) {
+        return res.status(404).json({ error: "Lab not found." });
+    }
 
     const totalAttempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?')
         .get(req.session.userId, lab.id).c;
@@ -242,16 +252,19 @@ router.get('/lab/:id', (req, res) => {
     let timeRemaining = null;
     let sessionActive = false;
 
+    const timeLimitMinutes = getConfigNumber(lab.time_limit_minutes, 0);
+
     if (activeSession) {
         sessionActive = true;
-        if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
+        if (timeLimitMinutes > 0) {
             const startTime = new Date(activeSession.timestamp.replace(' ', 'T') + 'Z').getTime();
             const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            timeRemaining = Math.max(0, (lab.time_limit_minutes * 60) - elapsed);
+            timeRemaining = Math.max(0, (timeLimitMinutes * 60) - elapsed);
             
             if (timeRemaining <= 0) {
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
-                    .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), activeSession.id);
+                const durationSeconds = elapsedSecondsSince(activeSession.timestamp);
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                    .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), durationSeconds, activeSession.id);
                 sessionActive = false;
                 timeRemaining = null;
             }
@@ -261,9 +274,9 @@ router.get('/lab/:id', (req, res) => {
     res.json({
         id: lab.id,
         title: lab.title,
-        max_submissions: lab.max_submissions || 0,
+        max_submissions: getConfigNumber(lab.max_submissions, 0),
         attempts_taken: totalAttempts,
-        time_limit_minutes: lab.time_limit_minutes || 0,
+        time_limit_minutes: timeLimitMinutes,
         has_pka_file: !!lab.pka_file,
         session_active: sessionActive,
         time_remaining_seconds: timeRemaining
@@ -281,20 +294,24 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
         return res.status(403).json({ error: "Lab is currently closed outside of the competition window." });
     }
 
+    const timeLimitMinutes = getConfigNumber(lab.time_limit_minutes, 0);
+    const maxSubmissions = getConfigNumber(lab.max_submissions, 0);
+
     const startSession = db.transaction(() => {
         const existing = db.prepare("SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1")
             .get(req.session.userId, lab.id);
 
         if (existing) {
             let timeRemaining = null;
-            if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
+            if (timeLimitMinutes > 0) {
                 const startTime = new Date(existing.timestamp.replace(' ', 'T') + 'Z').getTime();
                 const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                timeRemaining = Math.max(0, (lab.time_limit_minutes * 60) - elapsed);
+                timeRemaining = Math.max(0, (timeLimitMinutes * 60) - elapsed);
 
                 if (timeRemaining <= 0) {
-                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
-                        .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), existing.id);
+                    const durationSeconds = elapsedSecondsSince(existing.timestamp);
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                        .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), durationSeconds, existing.id);
                     return { error: "Your previous session has expired.", code: 403 };
                 }
             }
@@ -302,10 +319,10 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
             return { resumed: true, timeRemaining };
         }
 
-        if (lab.max_submissions && lab.max_submissions > 0) {
+        if (maxSubmissions > 0) {
             const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?')
                 .get(req.session.userId, lab.id).c;
-            if (count >= lab.max_submissions) {
+            if (count >= maxSubmissions) {
                 return { error: "Maximum attempts reached.", code: 403 };
             }
         }
@@ -314,8 +331,8 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
             .run(req.session.userId, req.session.uniqueId, lab.id);
 
         let timeRemaining = null;
-        if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
-            timeRemaining = lab.time_limit_minutes * 60;
+        if (timeLimitMinutes > 0) {
+            timeRemaining = timeLimitMinutes * 60;
         }
 
         return { resumed: false, timeRemaining };
@@ -339,12 +356,6 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
 router.get('/lab/:id/download', downloadLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).send("Unauthorized");
 
-    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.session.userId);
-    if (!user) {
-        req.session.destroy(() => {});
-        return res.status(401).send("Unauthorized");
-    }
-
     const cfg = getConfig();
     const lab = (cfg.labs || []).find(l => l.id === req.params.id);
     if (!lab) return res.status(404).send("Lab not found.");
@@ -361,12 +372,13 @@ router.get('/lab/:id/download', downloadLimiter, (req, res) => {
         return res.status(403).send("Forbidden: No active lab session. Start the lab first.");
     }
 
-    if (lab.time_limit_minutes && lab.time_limit_minutes > 0) {
+    const timeLimitMinutes = getConfigNumber(lab.time_limit_minutes, 0);
+    if (timeLimitMinutes > 0) {
         const startTime = new Date(activeSession.timestamp.replace(' ', 'T') + 'Z').getTime();
         const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        if (elapsed > (lab.time_limit_minutes * 60)) {
-            db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ? WHERE id = ?")
-                .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), activeSession.id);
+        if (elapsed > (timeLimitMinutes * 60)) {
+            db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), elapsed, activeSession.id);
             return res.status(403).send("Forbidden: Lab session has expired.");
         }
     }
@@ -410,144 +422,88 @@ router.get('/lab/:id/download', downloadLimiter, (req, res) => {
 
 router.get('/leaderboard', leaderboardLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
-    if (process.env.SHOW_LEADERBOARD !== 'true') {
+    if (!envBool('SHOW_LEADERBOARD')) {
         return res.status(403).json({ error: "Leaderboard disabled" });
     }
-    
+
     const cfg = getConfig();
-    const labs = cfg.labs || [];
-    const quizzes = cfg.quizzes || [];
-    const allChallenges = [...labs, ...quizzes];
-
-    const users = db.prepare('SELECT id, username, score_adjustment, withheld FROM users').all();
-
-    // Single query replaces N*M synchronous queries in nested loops
-    const allScores = db.prepare(`
-        SELECT user_id, lab_id, MAX(score) as max_score
-        FROM submissions
-        WHERE status = 'completed'
-        GROUP BY user_id, lab_id
-    `).all();
-
-    const scoreMap = {};
-    allScores.forEach(row => {
-        if (!scoreMap[row.user_id]) scoreMap[row.user_id] = {};
-        scoreMap[row.user_id][row.lab_id] = row.max_score;
-    });
-
-    const leaderboard = [];
-
-    users.forEach(u => {
-        let total = 0;
-        const scores = {};
-        
-        allChallenges.forEach(ch => {
-            let hideScore = false;
-            if (ch.type === 'quiz') {
-                const qCfg = quizzes.find(q => q.id === ch.id);
-                if (qCfg && qCfg.show_score === false) hideScore = true;
-            } else {
-                const lCfg = labs.find(l => l.id === ch.id);
-                if (lCfg && lCfg.show_score === false) hideScore = true;
-            }
-
-            // O(1) map lookup instead of a DB query
-            const score = (scoreMap[u.id] && scoreMap[u.id][ch.id] != null) ? scoreMap[u.id][ch.id] : 0;
-            
-            if (hideScore) {
-                scores[ch.id] = '?'; 
-            } else {
-                scores[ch.id] = score;
-                total += score;
-            }
-        });
-
-        // Apply global modifier
-        if (u.score_adjustment) {
-            total += u.score_adjustment;
-        }
-        
-        // Ensure total doesn't dip below 0
-        if (total < 0) total = 0;
-
-        if (total > 0 || Object.values(scores).some(s => s === '?')) {
-            if (u.withheld) {
-                Object.keys(scores).forEach(k => scores[k] = 'W');
-            }
-            leaderboard.push({ 
-                username: u.username, 
-                scores: scores, 
-                total_score: u.withheld ? 'W' : total 
-            });
-        }
-    });
-
-    leaderboard.sort((a, b) => {
-        if (a.total_score === 'W' && b.total_score !== 'W') return 1;
-        if (a.total_score !== 'W' && b.total_score === 'W') return -1;
-        if (a.total_score === 'W' && b.total_score === 'W') return 0;
-        return b.total_score - a.total_score;
-    });
+    const { allChallenges, leaderboard: fullBoard } = buildLeaderboard(cfg);
+    const truncated = fullBoard.length > MAX_LEADERBOARD;
+    const leaderboard = truncated ? fullBoard.slice(0, MAX_LEADERBOARD) : fullBoard;
 
     const headers = allChallenges.map(c => ({ id: c.id, title: c.title }));
-    res.json({ success: true, labs: headers, leaderboard: leaderboard });
+    res.json({ success: true, labs: headers, leaderboard, truncated, total_entries: fullBoard.length });
 });
 
-router.get('/history', (req, res) => {
-    if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    if (process.env.SHOW_HISTORY !== 'true') return res.status(403).json({ error: "History disabled" });
-    
-    const cfg = getConfig();
-    const submissions = db.prepare("SELECT id, lab_id, score, max_score, timestamp, details, type FROM submissions WHERE user_id = ? AND status = 'completed' ORDER BY id DESC").all(req.session.userId);
-    
-    const safeSubmissions = submissions.map(sub => {
-        let showScore = true;
-        let showDetails = true;
-        let showMissed = false;
-        let type = sub.type || 'lab';
+function formatHistoryRow(sub, cfg) {
+    let showScore = true;
+    let showDetails = true;
+    let showMissed = false;
+    const type = sub.type || 'lab';
 
+    if (type === 'quiz') {
+        const qCfg = (cfg.quizzes || []).find(q => q.id === sub.lab_id);
+        showScore = qCfg ? (qCfg.show_score !== false) : true;
+        showDetails = qCfg ? (qCfg.show_corrections !== false) : true;
+        showMissed = qCfg ? (qCfg.show_missed_points === true) : false;
+    } else {
+        const lCfg = (cfg.labs || []).find(l => l.id === sub.lab_id);
+        showScore = lCfg ? (lCfg.show_score !== false) : true;
+        showDetails = lCfg ? (lCfg.show_check_messages !== false) : true;
+        showMissed = lCfg ? (lCfg.show_missed_points === true) : false;
+    }
+
+    let details = [];
+    try { details = JSON.parse(sub.details); } catch (e) { /* ignore */ }
+    if (!Array.isArray(details)) details = [];
+
+    let clientDetails = null;
+    if (showDetails) {
         if (type === 'quiz') {
-            const qCfg = (cfg.quizzes || []).find(q => q.id === sub.lab_id);
-            showScore = qCfg ? (qCfg.show_score !== false) : true;
-            showDetails = qCfg ? (qCfg.show_corrections !== false) : true;
-            showMissed = qCfg ? (qCfg.show_missed_points === true) : false;
+            clientDetails = details.filter(item => item.correct || showMissed);
         } else {
-            const lCfg = (cfg.labs || []).find(l => l.id === sub.lab_id);
-            showScore = lCfg ? (lCfg.show_score !== false) : true;
-            showDetails = lCfg ? (lCfg.show_check_messages !== false) : true;
-            showMissed = lCfg ? (lCfg.show_missed_points === true) : false;
+            clientDetails = details.filter(item => item.passed !== false || showMissed).map(item => ({
+                message: item.message,
+                points: item.awarded,
+                passed: item.passed,
+                device: item.device,
+                context: item.context
+            }));
         }
+    }
 
-        let details = [];
-        try { details = JSON.parse(sub.details); } catch(e) {}
-        if (!Array.isArray(details)) details = [];
+    return {
+        id: sub.id,
+        lab_id: sub.lab_id,
+        type: type,
+        score: showScore ? sub.score : null,
+        max_score: showScore ? sub.max_score : null,
+        timestamp: sub.timestamp,
+        duration_seconds: sub.duration_seconds,
+        details: clientDetails
+    };
+}
 
-        let clientDetails = null;
-        if (showDetails) {
-            if (type === 'quiz') {
-                clientDetails = details.filter(item => item.correct || showMissed);
-            } else {
-                clientDetails = details.filter(item => item.passed !== false || showMissed).map(item => ({ 
-                    message: item.message, 
-                    points: item.awarded, 
-                    passed: item.passed,
-                    device: item.device,
-                    context: item.context
-                }));
-            }
-        }
-        
-        return {
-            id: sub.id,
-            lab_id: sub.lab_id,
-            type: type,
-            score: showScore ? sub.score : null,
-            max_score: showScore ? sub.max_score : null,
-            timestamp: sub.timestamp,
-            details: clientDetails
-        };
-    });
-    res.json({ success: true, history: safeSubmissions });
+router.get('/history', historyLimiter, (req, res) => {
+    if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
+    if (!envBool('SHOW_HISTORY')) return res.status(403).json({ error: "History disabled" });
+
+    const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+    const userId = req.session.userId;
+    const cfg = getConfig();
+
+    const { total } = db.prepare(
+        "SELECT COUNT(*) as total FROM submissions WHERE user_id = ? AND status = 'completed'"
+    ).get(userId);
+
+    const submissions = db.prepare(
+        "SELECT id, lab_id, score, max_score, timestamp, details, type, duration_seconds FROM submissions WHERE user_id = ? AND status = 'completed' ORDER BY id DESC LIMIT ? OFFSET ?"
+    ).all(userId, limit, offset);
+
+    const history = submissions.map(sub => formatHistoryRow(sub, cfg));
+    const hasMore = offset + history.length < total;
+
+    res.json({ success: true, history, total, limit, offset, hasMore });
 });
 
 module.exports = router;

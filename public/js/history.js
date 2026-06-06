@@ -2,8 +2,63 @@ import { state } from './state.js';
 import { escapeHtml } from './utils.js';
 import { renderLabResults } from './lab.js';
 
-export async function loadHistory() {
-    const res = await fetch('/api/history');
+const HISTORY_LIMIT = 50;
+let historyOffset = 0;
+
+function formatDuration(seconds) {
+    if (seconds == null) return null;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+function renderHistoryRow(sub, list) {
+    const item = document.createElement('div');
+    item.className = 'history-row';
+    const date = new Date(sub.timestamp).toLocaleString();
+    item.addEventListener('click', () => showHistoryDetail(sub));
+
+    const challenge = state.availableChallenges.find(c => c.id === sub.lab_id);
+    const title = challenge ? challenge.title : sub.lab_id;
+    const scoreText = sub.score !== null ? `${sub.score} / ${sub.max_score}` : 'Hidden';
+    const timeText = formatDuration(sub.duration_seconds);
+    const typeLabel = sub.type === 'quiz'
+        ? '<span class="hist-type type-quiz">Quiz</span>'
+        : '<span class="hist-type type-lab">Lab</span>';
+
+    item.innerHTML = `
+        <div>
+            <div class="text-white-bold">${typeLabel} ${escapeHtml(title)}</div>
+            <div class="hist-date">${date}${timeText ? ` · ${timeText}` : ''}</div>
+        </div>
+        <div class="hist-score">${scoreText}</div>
+    `;
+    list.appendChild(item);
+}
+
+function updateHistoryLoadMore(panel, hasMore) {
+    let btn = document.getElementById('history-load-more');
+    if (!hasMore) {
+        if (btn) btn.remove();
+        return;
+    }
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'history-load-more';
+        btn.className = 'btn-secondary';
+        btn.classList.add('mt-12');
+        btn.textContent = 'Load more';
+        btn.addEventListener('click', () => loadHistory(true));
+        panel.appendChild(btn);
+    }
+}
+
+export async function loadHistory(append = false) {
+    if (!append) historyOffset = 0;
+
+    const res = await fetch(`/api/history?limit=${HISTORY_LIMIT}&offset=${historyOffset}`);
     const data = await res.json();
 
     if (data.error) {
@@ -11,35 +66,22 @@ export async function loadHistory() {
         return;
     }
 
+    const panel = document.getElementById('history-list-panel');
     const list = document.getElementById('history-list');
-    if (!data.history || data.history.length === 0) {
+
+    if (!append && (!data.history || data.history.length === 0)) {
         list.innerHTML = "<div class='challenges-empty'>No submissions yet.</div>";
+        updateHistoryLoadMore(panel, false);
         return;
     }
 
-    list.innerHTML = '';
-    data.history.forEach(sub => {
-        const item = document.createElement('div');
-        item.className = 'history-row';
-        const date = new Date(sub.timestamp).toLocaleString();
-        item.addEventListener('click', () => showHistoryDetail(sub));
+    if (!append) list.innerHTML = '';
+    (data.history || []).forEach(sub => renderHistoryRow(sub, list));
 
-        const challenge = state.availableChallenges.find(c => c.id === sub.lab_id);
-        const title = challenge ? challenge.title : sub.lab_id;
-        const scoreText = sub.score !== null ? `${sub.score} / ${sub.max_score}` : 'Hidden';
-        const typeLabel = sub.type === 'quiz'
-            ? '<span class="hist-type type-quiz">Quiz</span>'
-            : '<span class="hist-type type-lab">Lab</span>';
-
-        item.innerHTML = `
-            <div>
-                <div style="font-weight:bold;color:#fff">${typeLabel} ${escapeHtml(title)}</div>
-                <div class="hist-date">${date}</div>
-            </div>
-            <div class="hist-score">${scoreText}</div>
-        `;
-        list.appendChild(item);
-    });
+    if (data.hasMore) {
+        historyOffset = data.offset + data.history.length;
+    }
+    updateHistoryLoadMore(panel, data.hasMore);
 }
 
 function showHistoryDetail(sub) {
@@ -49,15 +91,17 @@ function showHistoryDetail(sub) {
 
     const challenge = state.availableChallenges.find(c => c.id === sub.lab_id);
     document.getElementById('hist-lab').innerText = challenge ? challenge.title : sub.lab_id;
-    document.getElementById('hist-score').innerText = sub.score !== null ? `${sub.score} / ${sub.max_score}` : 'Hidden';
+    const timeLabel = formatDuration(sub.duration_seconds);
+    const scoreLine = sub.score !== null ? `${sub.score} / ${sub.max_score}` : 'Hidden';
+    document.getElementById('hist-score').innerText = timeLabel ? `${scoreLine} (${timeLabel})` : scoreLine;
 
     const cont = document.getElementById('hist-checks');
     cont.innerHTML = '';
 
     if (sub.details === null) {
-        cont.innerHTML = "<div style='text-align:center;color:#888'>Details hidden.</div>";
+        cont.innerHTML = "<div class='text-center-muted'>Details hidden.</div>";
     } else if (sub.details.length === 0) {
-        cont.innerHTML = "<div style='text-align:center;color:#888'>No awarded points to display.</div>";
+        cont.innerHTML = "<div class='text-center-muted'>No awarded points to display.</div>";
     } else if (sub.type === 'quiz') {
         sub.details.forEach(item => {
             const row = document.createElement('div');

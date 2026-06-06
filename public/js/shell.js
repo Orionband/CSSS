@@ -28,6 +28,7 @@ function applyBootstrap(data, activePage) {
     if (data.csrfToken) state.csrfToken = data.csrfToken;
 
     window.isAdmin = !!data.user?.is_admin;
+    window.isOwner = !!data.user?.is_owner;
     state.currentUser = data.user?.unique_id || null;
 
     const uidEl = document.getElementById('uid-display');
@@ -62,6 +63,7 @@ async function fetchBootstrapFallback() {
             id: meData.id,
             unique_id: meData.unique_id,
             is_admin: meData.is_admin,
+            is_owner: meData.is_owner,
         },
         challenges: cfgData.challenges || [],
         options: cfgData.options || {},

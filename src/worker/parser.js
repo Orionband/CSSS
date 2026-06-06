@@ -1,4 +1,4 @@
-﻿function getXmlValue(rootObj, pathArray) {
+function getXmlValue(rootObj, pathArray) {
     let current = rootObj;
     for (let i = 0; i < pathArray.length; i++) {
         let key = pathArray[i];
@@ -56,13 +56,25 @@ function unwrapValue(val) {
     return val;
 }
 
+function configLineText(rawLine) {
+    if (rawLine == null) return null;
+    if (typeof rawLine === 'string') return rawLine;
+    if (typeof rawLine === 'object' && '_' in rawLine) {
+        const inner = rawLine._;
+        if (inner == null) return null;
+        return typeof inner === 'string' ? inner : String(inner);
+    }
+    if (typeof rawLine === 'number' || typeof rawLine === 'boolean') return String(rawLine);
+    return null;
+}
+
 function parseCiscoConfig(lines) {
     if (!lines || lines.length === 0) return { global: [], blocks: Object.create(null) };
     const config = { global: [], blocks: Object.create(null) };
     let currentBlock = null;
     lines.forEach(rawLine => {
-        const line = typeof rawLine === 'string' ? rawLine : rawLine._;
-        if (!line) return;
+        const line = configLineText(rawLine);
+        if (line == null || line === '') return;
         const trimmed = line.trim();
         if (trimmed === '!' || trimmed === '' || trimmed === 'end') return;
         if (line.startsWith(' ')) {

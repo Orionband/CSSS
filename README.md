@@ -28,7 +28,10 @@
 ## Tools
 
 ### `quickstart.js`
-Run `node quickstart.js` to generate the `.env` file and configure settings.
+Run `node quickstart.js` to generate the `.env` file and configure settings. You can optionally create an **owner** account — the first privileged account with full admin panel access. Only the owner can create additional **admin** accounts; admins can manage users but cannot grant admin privileges.
+
+For existing installs without an owner, designate one manually in the database:
+`UPDATE users SET is_admin = 1, is_owner = 1 WHERE id = ?;`
 
 ### `tool.js`
 Run `node tool.js` to admin stuff like

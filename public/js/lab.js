@@ -64,7 +64,7 @@ export function renderLabResults(container, breakdown) {
                     row.innerHTML = `<span>${escapeHtml(c.message)}</span><span class="pts">${c.points > 0 ? '+' + c.points : c.points}</span>`;
                 } else {
                     row.className = 'check-item missed';
-                    row.innerHTML = `<span>${escapeHtml(c.message)}</span><span class="pts" style="color:#4da6ff">${c.points}</span>`;
+                    row.innerHTML = `<span>${escapeHtml(c.message)}</span><span class="pts text-pts">${c.points}</span>`;
                 }
                 ctxContent.appendChild(row);
             });
@@ -119,17 +119,19 @@ export async function loadLabInfo(id) {
     const data = await res.json();
 
     setLabLoading(false);
-    document.getElementById('lab-title').innerText = data.title || 'Lab';
 
-    if (data.error) {
+    if (!res.ok || data.error) {
         showLabIntro();
+        document.getElementById('lab-title').innerText = 'Lab';
         if (errorEl) {
-            errorEl.textContent = data.error;
+            errorEl.textContent = data.error || 'Lab not found.';
             errorEl.classList.remove('hidden');
         }
         document.getElementById('btn-start-lab')?.classList.add('hidden');
         return;
     }
+
+    document.getElementById('lab-title').innerText = data.title || 'Lab';
 
     setLabStats(data);
     document.getElementById('btn-start-lab')?.classList.remove('hidden');

@@ -102,10 +102,8 @@ export async function startQuizSession() {
             const pkaLink = document.createElement('a');
             pkaLink.href = `/api/quiz/asset/pka/${q.pka}`;
             pkaLink.download = q.pka;
-            pkaLink.className = 'lab-download-link';
+            pkaLink.className = 'lab-download-link inline-block-my';
             pkaLink.textContent = 'Download Packet Tracer Exhibit';
-            pkaLink.style.display = 'inline-block';
-            pkaLink.style.margin = '10px 0';
             card.appendChild(pkaLink);
         }
 
