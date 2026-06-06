@@ -1,5 +1,6 @@
 node_modules/
 captures/
+security/
 protected/images/
 protected/pka/
 grader.db
@@ -9,3 +10,8 @@ combined.txt
 .env
 grader.db-shm
 grader.db-wal
+THREAT_MODEL.md
+VULN-FINDINGS.md
+VULN-FINDINGS.json
+TRIAGE.json
+TRIAGE.md

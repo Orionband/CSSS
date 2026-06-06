@@ -1,10 +1,11 @@
 const zlib = require('zlib');
 const fs = require('fs');
 const crypto = require('crypto');
-const { xor, cmac, decryptCTR, PKT_N_TAG, PKT_H_TAG } = require('./crypto');
+const { xor, cmac, decryptCTRWithFinalXor, PKT_N_TAG, PKT_H_TAG } = require('./crypto');
 const { parseCiscoConfig } = require('./parser');
 const { evaluateCondition } = require('./grading');
 const { parseXmlForGrading } = require('./xmlLimits');
+const { ensureArray } = require('../limits');
 
 function stripDoctypeCompletely(xml) {
     if (/<!DOCTYPE/i.test(xml) || /<!ENTITY/i.test(xml)) {
@@ -19,7 +20,7 @@ function sanitizeErrorMessage(rawMessage) {
     const msg = rawMessage.toLowerCase();
 
     if (msg.includes('file integrity failed')) return "File integrity check failed. The file may be corrupted.";
-    if (msg.includes('element limit') || msg.includes('attribute limit') || msg.includes('nesting depth') || msg.includes('parse size limit') || msg.includes('invalid xml structure')) {
+    if (msg.includes('element limit') || msg.includes('attribute limit') || msg.includes('nesting depth') || msg.includes('invalid xml structure')) {
         return "The file exceeds size or complexity limits.";
     }
     if (msg.includes('decompression failed') || msg.includes('too large')) return "File decompression failed or exceeds size limits.";
@@ -33,7 +34,7 @@ function sanitizeErrorMessage(rawMessage) {
 
 function collectRequiredDeviceNames(checks) {
     const names = new Set();
-    for (const check of checks || []) {
+    for (const check of ensureArray(checks)) {
         if (check.device) names.add(check.device);
     }
     return names;
@@ -123,22 +124,18 @@ async function runGrade(job, emit) {
             throw new Error("File Integrity Failed");
         }
         report("Decrypting", 45);
-        const decrypted = decryptCTR(key, PKT_N_TAG, ciphertext);
-
-        report("Finalizing", 60);
-        const s3 = Buffer.allocUnsafe(decrypted.length);
-        const dLen = decrypted.length;
-        for (let i = 0; i < dLen; i++) s3[i] = (decrypted[i] ^ (dLen - i)) & 0xFF;
+        const payload = Buffer.allocUnsafe(ciphertext.length);
+        decryptCTRWithFinalXor(key, PKT_N_TAG, ciphertext, payload, true);
 
         report("Decompressing", 65);
 
         const zlibOptions = { maxOutputLength: MAX_XML_OUTPUT };
 
         try {
-            finalXML = zlib.inflateSync(s3.subarray(4), zlibOptions).toString();
+            finalXML = zlib.inflateSync(payload.subarray(4), zlibOptions).toString();
         } catch (e) {
             try {
-                finalXML = zlib.inflateRawSync(s3.subarray(4), zlibOptions).toString();
+                finalXML = zlib.inflateRawSync(payload.subarray(4), zlibOptions).toString();
             } catch (zlibErr) {
                 throw new Error("Decompression failed or file too large.");
             }
@@ -153,7 +150,7 @@ async function runGrade(job, emit) {
 
     const xmlObj = await parseXmlForGrading(finalXML);
 
-    const checks = labConfig.checks || [];
+    const checks = ensureArray(labConfig.checks);
     const requiredDevices = collectRequiredDeviceNames(checks);
 
     let ptBlocks = [];
@@ -186,19 +183,22 @@ async function runGrade(job, emit) {
         let pass = false;
 
         let checkContext = 'global';
-        if (check.pass && check.pass.length > 0) {
-            checkContext = check.pass[0].context || (check.pass[0].type.startsWith('Xml') ? 'hardware' : 'global');
-        } else if (check.passoverride && check.passoverride.length > 0) {
-            checkContext = check.passoverride[0].context || 'global';
+        const passArr = ensureArray(check.pass);
+        const passOverrideArr = ensureArray(check.passoverride);
+        const failArr = ensureArray(check.fail);
+        if (passArr.length > 0) {
+            checkContext = passArr[0].context || (passArr[0].type.startsWith('Xml') ? 'hardware' : 'global');
+        } else if (passOverrideArr.length > 0) {
+            checkContext = passOverrideArr[0].context || 'global';
         }
 
         if (device) {
-            const failCond = check.fail && check.fail.some((c) => evaluateCondition(device, c));
+            const failCond = failArr.some((c) => evaluateCondition(device, c));
             if (!failCond) {
-                if (check.passoverride && check.passoverride.some((c) => evaluateCondition(device, c))) {
+                if (passOverrideArr.some((c) => evaluateCondition(device, c))) {
                     pass = true;
-                } else if (check.pass && check.pass.length > 0) {
-                    pass = check.pass.every((c) => evaluateCondition(device, c));
+                } else if (passArr.length > 0) {
+                    pass = passArr.every((c) => evaluateCondition(device, c));
                 }
             }
         }

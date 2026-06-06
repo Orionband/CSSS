@@ -2,9 +2,12 @@ const Database = require('better-sqlite3');
 const readline = require('readline');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { customAlphabet } = require('nanoid');
+const { sanitizeUsername, sanitizeEmail } = require('./src/sanitizeUserFields');
+const { validatePasswordPolicy } = require('./src/passwordPolicy');
 
 function generateUniqueId() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -81,7 +84,9 @@ function findUserByIdOrUsername(key) {
   if (/^\d+$/.test(key)) {
     return db.prepare('SELECT * FROM users WHERE id = ?').get(Number(key));
   } else {
-    return db.prepare('SELECT * FROM users WHERE username = ?').get(key);
+    const userStr = sanitizeUsername(key);
+    if (!userStr) return null;
+    return db.prepare('SELECT * FROM users WHERE username = ?').get(userStr);
   }
 }
 
@@ -223,6 +228,27 @@ function genRandomPassword(len = 12) {
   return out;
 }
 
+function writeGeneratedPasswordFile(password) {
+  const pwFile = path.join(os.tmpdir(), `.csss-pw-${process.pid}.txt`);
+  fs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
+  console.log(`Generated password written to: ${pwFile}`);
+  console.log('Read it once, then delete the file.');
+}
+
+function applyCliPassword(pw, label) {
+  if (!pw) {
+    pw = genRandomPassword();
+    writeGeneratedPasswordFile(pw);
+    return pw;
+  }
+  const check = validatePasswordPolicy(pw);
+  if (!check.ok) {
+    console.log(`${label}: ${check.error}`);
+    return null;
+  }
+  return pw;
+}
+
 async function resetPassword() {
   const key = await ask('Enter user id or username to reset password: ');
   const user = findUserByIdOrUsername(key);
@@ -234,10 +260,8 @@ async function resetPassword() {
   console.table([ { ...user, password: '***bcrypt***' } ]);
 
   let pw = await ask('Enter new password (leave empty to auto-generate): ');
-  if (!pw) {
-    pw = genRandomPassword();
-    console.log('Generated password:', pw);
-  }
+  pw = applyCliPassword(pw, 'Aborted');
+  if (!pw) return;
   const rounds = 10;
   const hash = bcrypt.hashSync(pw, rounds);
   backupDb();
@@ -315,20 +339,18 @@ async function runPlainSql() {
 }
 
 async function createUser() {
-    const username = await ask('Enter new username: ');
-    if (!username) return console.log("Aborted: Username required.");
-    
+    const username = sanitizeUsername(await ask('Enter new username: '));
+    if (!username) return console.log("Aborted: Invalid username (ASCII letters, numbers, . _ - only).");
+
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return console.log("Aborted: Username already exists.");
 
-    const email = await ask('Enter new email: ');
-    if (!email) return console.log("Aborted: Email required.");
+    const email = sanitizeEmail(await ask('Enter new email: '));
+    if (!email) return console.log("Aborted: Invalid email address.");
 
     let pw = await ask('Enter password (leave empty to auto-generate): ');
-    if (!pw) {
-        pw = genRandomPassword();
-        console.log('Generated password:', pw);
-    }
+    pw = applyCliPassword(pw, 'Aborted');
+    if (!pw) return;
 
     const uid = generateUniqueId();
     const hash = bcrypt.hashSync(pw, 10);

@@ -18,7 +18,7 @@ function verifyType5(password, storedHash) {
         return false;
     }
 
-    const salt = parts[2];
+    const salt = parts[2].substring(0, 8);
     try {
         const computed = CryptMD5.cryptMD5(password, salt);
         
@@ -37,6 +37,7 @@ function evaluateCondition(device, condition) {
 
     // Detect Negation
     let type = condition.type;
+    if (typeof type !== 'string' || type.length === 0) return false;
     let isNegated = false;
 
     if (type.endsWith('Not')) {

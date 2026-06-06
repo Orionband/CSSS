@@ -109,6 +109,9 @@ button:active, button:focus { outline: none; }
     overflow-y: auto;
     position: relative;
 }
+.modal-content:has(.admin-table) {
+    width: min(800px, 100%);
+}
 .modal-close {
     position: absolute;
     right: 16px;
@@ -147,3 +150,33 @@ td { padding: 12px 10px; border-bottom: 1px solid var(--input-bg); }
 tr:last-child td { border-bottom: none; }
 
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.text-accent { color: var(--accent); }
+.text-accent-bold { color: var(--accent); font-weight: bold; }
+.text-dim-sm { color: var(--text-dim); font-size: 0.85rem; }
+.text-dim { color: var(--text-dim); }
+.text-muted { color: #888; }
+.text-success { color: #4CAF50; }
+.text-danger { color: #f44747; }
+.text-white-bold { font-weight: bold; color: #fff; }
+.text-center-muted { text-align: center; color: #888; }
+.text-pts { color: #4da6ff; }
+.mb-5 { margin-bottom: 5px; }
+.mb-15 { margin-bottom: 15px; }
+.mb-20 { margin-bottom: 20px; }
+.mb-25 { margin-bottom: 25px; }
+.mt-12 { margin-top: 12px; }
+.block-label { margin-bottom: 5px; display: block; }
+.badge-admin { background: var(--accent); color: #000; }
+.badge-owner { background: #e6b800; color: #000; }
+.table-scroll-400 { max-height: 400px; }
+.error-center { color: var(--accent); text-align: center; }
+.score-display-mb { margin-bottom: 20px; }
+.inline-block-my { display: inline-block; margin: 10px 0; }
+.adj-positive { color: #4CAF50; }
+.adj-negative { color: #f44747; }
+.adj-zero { color: #888; }
+.withheld-yes { color: #f44747; }
+.withheld-no { color: #888; }
+.hist-lab-title { display: block; margin-top: 4px; }
+.admin-title { margin: 0; }

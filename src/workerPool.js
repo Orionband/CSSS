@@ -26,8 +26,11 @@ class GraderWorkerPool {
         slot.worker.on('message', (msg) => this._onWorkerMessage(slot, msg));
         slot.worker.on('error', () => this._handleWorkerFailure(slot, 'error'));
         slot.worker.on('exit', (code) => {
-            if (code !== 0 && slot.busy) {
-                this._failJob(slot, 'An internal processing error occurred.');
+            if (slot.busy) {
+                const message = code === 0
+                    ? 'Grading ended unexpectedly. Please try again.'
+                    : 'An internal processing error occurred.';
+                this._failJob(slot, message);
             }
             if (!this.slots.includes(slot)) return;
             this._replaceSlot(slot);
