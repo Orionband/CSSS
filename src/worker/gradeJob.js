@@ -8,10 +8,15 @@ const { parseXmlForGrading } = require('./xmlLimits');
 const { ensureArray } = require('../limits');
 
 function stripDoctypeCompletely(xml) {
-    if (/<!DOCTYPE/i.test(xml) || /<!ENTITY/i.test(xml)) {
-        throw new Error("Invalid XML: DOCTYPE and ENTITY declarations are strictly forbidden.");
-    }
-    return xml;
+    let result = xml;
+    const doctypeRe = /<!DOCTYPE(?:[^[\]"']|"[^"]*"|'[^']*'|\[[\s\S]*?\])*?>/gi;
+    let prev;
+    do {
+        prev = result;
+        result = result.replace(doctypeRe, '');
+    } while (result !== prev);
+    result = result.replace(/<!ENTITY\s+[^>]*>/gi, '');
+    return result;
 }
 
 function sanitizeErrorMessage(rawMessage) {
@@ -21,6 +26,9 @@ function sanitizeErrorMessage(rawMessage) {
 
     if (msg.includes('file integrity failed')) return "File integrity check failed. The file may be corrupted.";
     if (msg.includes('element limit') || msg.includes('attribute limit') || msg.includes('nesting depth') || msg.includes('invalid xml structure')) {
+        return "The file exceeds size or complexity limits.";
+    }
+    if (msg.includes('insufficient memory') || msg.includes('memory pressure')) {
         return "The file exceeds size or complexity limits.";
     }
     if (msg.includes('decompression failed') || msg.includes('too large')) return "File decompression failed or exceeds size limits.";

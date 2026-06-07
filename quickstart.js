@@ -98,7 +98,7 @@ const askProxyType = async () => {
     replaceOrAdd('SHOW_LEADERBOARD', showLeaderboard);
     replaceOrAdd('SHOW_HISTORY', showHistory);
     replaceOrAdd('ALLOW_REGISTRATION', allowRegistration);
-    replaceOrAdd('DEFAULT_MAX_UPLOAD_MB', '50');
+    replaceOrAdd('DEFAULT_MAX_UPLOAD_MB', '60');
 
     let trustProxyValue = null;
     if (behindProxy === 'true') {

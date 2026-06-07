@@ -1,6 +1,9 @@
+const fs = require('fs');
+const v8 = require('v8');
 const xml2js = require('xml2js');
 
 const DEFAULT_MAX_ELEMENTS = 350000;
+const HEAP_PRESSURE_RATIO = 0.8;
 const DEFAULT_MAX_DEPTH = 48;
 const DEFAULT_MAX_ATTRIBUTES = 500000;
 
@@ -11,10 +14,20 @@ const XML2JS_PARSER_OPTIONS = {
     useNullPrototype: true,
 };
 
-function countEqualsInRange(str, start, end) {
+function countAttributeDelimiters(str, start, end) {
     let count = 0;
+    let inQuote = false;
+    let quoteChar = null;
     for (let j = start; j < end; j++) {
-        if (str.charCodeAt(j) === 61) count++;
+        const c = str[j];
+        if (inQuote) {
+            if (c === quoteChar) inQuote = false;
+        } else if (c === '"' || c === "'") {
+            inQuote = true;
+            quoteChar = c;
+        } else if (c === '=') {
+            count++;
+        }
     }
     return count;
 }
@@ -90,7 +103,7 @@ function validateXmlParseBudget(xml, opts = {}) {
             throw new Error('XML exceeds element limit.');
         }
 
-        const attrCount = countEqualsInRange(xml, i, gt + 1);
+        const attrCount = countAttributeDelimiters(xml, i + 1, gt);
         if (attrCount > 0) {
             attributes += attrCount;
             if (attributes > maxAttributes) {
@@ -110,12 +123,42 @@ function validateXmlParseBudget(xml, opts = {}) {
     }
 }
 
+function readCgroupMemoryLimitBytes() {
+    const paths = [
+        '/sys/fs/cgroup/memory.max',
+        '/sys/fs/cgroup/memory/memory.limit_in_bytes',
+    ];
+    for (const filePath of paths) {
+        try {
+            const raw = fs.readFileSync(filePath, 'utf8').trim();
+            if (raw === 'max') continue;
+            const n = Number.parseInt(raw, 10);
+            if (Number.isFinite(n) && n > 0) return n;
+        } catch {
+            /* not in a cgroup or path unavailable */
+        }
+    }
+    return 0;
+}
+
+function assertHeapBudgetForXmlParse() {
+    const { heapUsed, rss } = process.memoryUsage();
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+    const cgroupLimit = readCgroupMemoryLimitBytes();
+    const effectiveLimit = cgroupLimit > 0 ? Math.min(heapLimit, cgroupLimit) : heapLimit;
+    const used = cgroupLimit > 0 ? rss : heapUsed;
+    if (used > effectiveLimit * HEAP_PRESSURE_RATIO) {
+        throw new Error('XML parse refused: insufficient memory before parse.');
+    }
+}
+
 /**
  * Secure XML load for grading: pre-scan budgets, then strict xml2js parse.
  * Decompressed size is already capped by zlib maxOutputLength in the worker.
  */
 async function parseXmlForGrading(xml, opts = {}) {
     validateXmlParseBudget(xml, opts);
+    assertHeapBudgetForXmlParse();
     const parser = new xml2js.Parser(XML2JS_PARSER_OPTIONS);
     return parser.parseStringPromise(xml);
 }

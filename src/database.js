@@ -1,6 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+
+const LOCK_STALE_MINUTES = 10;
+const SERVER_PID = process.pid;
+
+function isProcessAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (err) {
+        return err.code === 'EPERM';
+    }
+}
+
 const db = new Database('grader.db');
 
 try {
@@ -82,9 +96,33 @@ catch (e) { db.prepare('ALTER TABLE users ADD COLUMN is_owner INTEGER DEFAULT 0'
 try { db.prepare('SELECT duration_seconds FROM submissions LIMIT 1').get(); }
 catch (e) { db.prepare('ALTER TABLE submissions ADD COLUMN duration_seconds INTEGER').run(); }
 
+try { db.prepare('SELECT stream_poll FROM submissions LIMIT 1').get(); }
+catch (e) { db.prepare('ALTER TABLE submissions ADD COLUMN stream_poll INTEGER DEFAULT 0').run(); }
+
+/** Lab attempts for max_submissions — excludes live-stream poll rows. */
+db.countLabAttempts = function(userId, labId) {
+    return db.prepare(
+        'SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ? AND COALESCE(stream_poll, 0) = 0'
+    ).get(userId, labId).c;
+};
+
+try { db.prepare('SELECT owner_pid FROM active_locks LIMIT 1').get(); }
+catch (e) { db.prepare('ALTER TABLE active_locks ADD COLUMN owner_pid INTEGER').run(); }
+
+db.clearStaleLocks = function() {
+    db.prepare(`DELETE FROM active_locks WHERE timestamp < datetime('now', '-${LOCK_STALE_MINUTES} minutes')`).run();
+
+    const rows = db.prepare('SELECT lock_key, owner_pid FROM active_locks WHERE owner_pid IS NOT NULL').all();
+    for (const row of rows) {
+        if (row.owner_pid !== SERVER_PID && !isProcessAlive(row.owner_pid)) {
+            db.prepare('DELETE FROM active_locks WHERE lock_key = ?').run(row.lock_key);
+        }
+    }
+};
+
 db.acquireLock = function(key) {
     try {
-        db.prepare("INSERT INTO active_locks (lock_key) VALUES (?)").run(key);
+        db.prepare('INSERT INTO active_locks (lock_key, owner_pid) VALUES (?, ?)').run(key, SERVER_PID);
         return true;
     } catch (e) {
         return false;
@@ -93,8 +131,27 @@ db.acquireLock = function(key) {
 
 db.releaseLock = function(key) {
     try {
-        db.prepare("DELETE FROM active_locks WHERE lock_key = ?").run(key);
+        db.prepare('DELETE FROM active_locks WHERE lock_key = ? AND owner_pid = ?').run(key, SERVER_PID);
     } catch (e) {}
+};
+
+db.releaseAllServerLocks = function() {
+    try {
+        db.prepare('DELETE FROM active_locks WHERE owner_pid = ?').run(SERVER_PID);
+    } catch (e) {}
+};
+
+/** Persist a completed lab grade; reconciles if the session was auto-closed while grading. */
+db.recordLabGradeResult = function(userId, labId, submissionId, total, max, detailsJson) {
+    const primary = db.prepare(
+        "UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ? AND user_id = ? AND lab_id = ? AND status = 'in_progress'"
+    ).run(total, max, detailsJson, submissionId, userId, labId);
+    if (primary.changes > 0) return true;
+
+    const reconcile = db.prepare(
+        "UPDATE submissions SET score = ?, max_score = ?, details = ? WHERE id = ? AND user_id = ? AND lab_id = ? AND status = 'completed' AND score = 0 AND max_score = 0"
+    ).run(total, max, detailsJson, submissionId, userId, labId);
+    return reconcile.changes > 0;
 };
 
 /** Remove stored matching-quiz mappings for a user (e.g. after timeout without submit). */
@@ -121,11 +178,22 @@ db.clearQuizMappingsForUser = function(userId, quizId) {
     }
 };
 
-// Clear stale grading locks on application startup
+// Drop stale grading locks on startup (TTL + dead owner processes).
 try {
-    db.prepare("DELETE FROM active_locks").run();
+    db.clearStaleLocks();
 } catch (e) {
-    console.error("Failed to clear startup locks:", e.message);
+    console.error('Failed to clear stale locks on startup:', e.message);
 }
+
+function releaseLocksOnShutdown() {
+    try {
+        db.releaseAllServerLocks();
+    } catch (e) {
+        console.error('Failed to release server locks on shutdown:', e.message);
+    }
+}
+
+process.once('SIGTERM', releaseLocksOnShutdown);
+process.once('SIGINT', releaseLocksOnShutdown);
 
 module.exports = db;

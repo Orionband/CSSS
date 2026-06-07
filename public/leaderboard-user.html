@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard Detail</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+    <nav class="navBar">
+        <a href="/challenges" class="nav-brand navElement" id="nav-brand"></a>
+        <div class="nav-links-row" id="nav-links-container"></div>
+        <div class="nav-user navElement">
+            <span id="uid-display"></span>
+            <button type="button" class="logout-btn" id="btn-logout">Logout</button>
+        </div>
+    </nav>
+    <script src="/js/branding-init.js"></script>
+
+    <main class="main-content">
+        <div class="content-wrap">
+            <div class="page-top">
+                <a href="/leaderboard" class="btn-ghost">&larr; Back to Leaderboard</a>
+                <h2 id="detail-title">Player Detail</h2>
+            </div>
+
+            <div id="detail-loading" class="page-loading">Loading player data&hellip;</div>
+            <div id="detail-error" class="error-msg hidden"></div>
+
+            <section id="detail-content" class="hidden">
+                <div class="componentContainer">
+                    <div class="panel-header">
+                        <h2 id="detail-username"></h2>
+                        <div class="panel-header-actions detail-summary">
+                            <span id="detail-total-score" class="score-display"></span>
+                            <span id="detail-total-time" class="text-dim"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="componentContainer table-scroll">
+                    <table id="detail-table">
+                        <thead>
+                            <tr>
+                                <th>Challenge</th>
+                                <th>Best Score</th>
+                                <th>Best Time</th>
+                                <th>Submissions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detail-table-body"></tbody>
+                    </table>
+                </div>
+
+                <div class="componentContainer">
+                    <div class="panel-header">
+                        <h2>Scores Over Time</h2>
+                        <small class="text-dim">Submission time (UTC) vs points</small>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="scores-chart"></canvas>
+                    </div>
+                    <p id="detail-chart-empty" class="challenges-empty hidden">No score history to graph.</p>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="/js/chart.min.js"></script>
+    <script type="module" src="/js/page-user-detail.js"></script>
+</body>
+</html>

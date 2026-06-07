@@ -146,6 +146,7 @@ function totalScoreForUser(userId, cfg, maps = null) {
 
 module.exports = {
     buildLeaderboard,
+    buildEntryForUser,
     getBestSubmissionsMaps,
     getScoreMap,
     totalScoreForUser,

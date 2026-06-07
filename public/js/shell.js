@@ -29,6 +29,7 @@ function applyBootstrap(data, activePage) {
 
     window.isAdmin = !!data.user?.is_admin;
     window.isOwner = !!data.user?.is_owner;
+    window.currentUserId = data.user?.id ?? null;
     state.currentUser = data.user?.unique_id || null;
 
     const uidEl = document.getElementById('uid-display');
