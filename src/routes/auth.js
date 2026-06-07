@@ -7,7 +7,7 @@ const db = require('../database');
 const { sanitizeUsername, sanitizeEmail, MAX_FIELD_LEN } = require('../sanitizeUserFields');
 const { validatePasswordPolicy } = require('../passwordPolicy');
 const { parsePagination, MAX_LEADERBOARD, rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
-const { buildLeaderboard } = require('../leaderboardScores');
+const { buildLeaderboard, buildEntryForUser, getBestSubmissionsMaps } = require('../leaderboardScores');
 const { elapsedSecondsSince } = require('../submissionDuration');
 const { getConfig, isWindowOpen } = require('../config');
 const router = express.Router();
@@ -21,7 +21,13 @@ function generateUniqueId() {
     return id.match(/.{1,4}/g).join('-');
 }
 
-const DUMMY_HASH = bcrypt.hashSync('__dummy_timing_safe_value_never_matches__', 10);
+let dummyHashCache = null;
+function getDummyHash() {
+    if (!dummyHashCache) {
+        dummyHashCache = bcrypt.hashSync('__dummy_timing_safe_value_never_matches__', 10);
+    }
+    return dummyHashCache;
+}
 
 const registerLimiter = rateLimit(rateLimitPreset({ windowMs: 24 * 60 * 60 * 1000, max: 10 }));
 const loginLimiter = rateLimit(rateLimitPreset({ windowMs: 5 * 60 * 1000, max: 5 }));
@@ -121,7 +127,7 @@ router.post('/login', loginLimiter, async (req, res) => {
             return res.status(401).json({ error: "Invalid credentials" });
         }
         const user = db.prepare('SELECT * FROM users WHERE username = ?').get(userStr);
-        const hashToCompare = user ? user.password : DUMMY_HASH;
+        const hashToCompare = user ? user.password : getDummyHash();
         
         const pwd = password !== undefined && password !== null ? String(password) : "";
         if (pwd.length > 100) {
@@ -186,12 +192,23 @@ function quizMaxPoints(quiz) {
     }, 0);
 }
 
-function buildChallengeList(cfg) {
+function buildChallengeList(cfg, userId) {
+    const activeKeys = new Set();
+    if (userId) {
+        const rows = db.prepare(
+            "SELECT lab_id, type FROM submissions WHERE user_id = ? AND status = 'in_progress'"
+        ).all(userId);
+        for (const row of rows) {
+            activeKeys.add(`${row.type}:${row.lab_id}`);
+        }
+    }
+
     const safeLabs = (cfg.labs || []).filter(l => isWindowOpen(l)).map(l => ({
         id: l.id,
         title: l.title,
         type: 'lab',
         points: labMaxPoints(l),
+        session_active: activeKeys.has(`lab:${l.id}`),
     }));
 
     const safeQuizzes = (cfg.quizzes || []).filter(q => isWindowOpen(q)).map(q => ({
@@ -199,6 +216,7 @@ function buildChallengeList(cfg) {
         title: q.title,
         type: 'quiz',
         points: quizMaxPoints(q),
+        session_active: activeKeys.has(`quiz:${q.id}`),
     }));
 
     return [...safeLabs, ...safeQuizzes];
@@ -208,7 +226,7 @@ router.get('/config', configLimiter, (req, res) => {
     const cfg = getConfig();
     const isAuthenticated = req.session && req.session.userId;
     res.json({
-        challenges: isAuthenticated ? buildChallengeList(cfg) : [],
+        challenges: isAuthenticated ? buildChallengeList(cfg, req.session.userId) : [],
         options: appOptions(),
     });
 });
@@ -229,7 +247,7 @@ router.get('/bootstrap', bootstrapLimiter, (req, res) => {
             is_owner: user && user.is_owner === 1,
         },
         csrfToken: ensureCsrfToken(req),
-        challenges: buildChallengeList(cfg),
+        challenges: buildChallengeList(cfg, req.session.userId),
         options: appOptions(),
     });
 });
@@ -243,8 +261,7 @@ router.get('/lab/:id', labInfoLimiter, (req, res) => {
         return res.status(404).json({ error: "Lab not found." });
     }
 
-    const totalAttempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?')
-        .get(req.session.userId, lab.id).c;
+    const totalAttempts = db.countLabAttempts(req.session.userId, lab.id);
     
     const activeSession = db.prepare("SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1")
         .get(req.session.userId, lab.id);
@@ -278,6 +295,7 @@ router.get('/lab/:id', labInfoLimiter, (req, res) => {
         attempts_taken: totalAttempts,
         time_limit_minutes: timeLimitMinutes,
         has_pka_file: !!lab.pka_file,
+        live_streaming: lab.live_streaming === true,
         session_active: sessionActive,
         time_remaining_seconds: timeRemaining
     });
@@ -320,8 +338,7 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
         }
 
         if (maxSubmissions > 0) {
-            const count = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?')
-                .get(req.session.userId, lab.id).c;
+            const count = db.countLabAttempts(req.session.userId, lab.id);
             if (count >= maxSubmissions) {
                 return { error: "Maximum attempts reached.", code: 403 };
             }
@@ -346,6 +363,7 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
             success: true,
             resumed: result.resumed,
             has_pka_file: !!lab.pka_file,
+            live_streaming: lab.live_streaming === true,
             time_remaining_seconds: result.timeRemaining
         });
     } catch (err) {
@@ -433,6 +451,97 @@ router.get('/leaderboard', leaderboardLimiter, (req, res) => {
 
     const headers = allChallenges.map(c => ({ id: c.id, title: c.title }));
     res.json({ success: true, labs: headers, leaderboard, truncated, total_entries: fullBoard.length });
+});
+
+function formatPlayTime(seconds) {
+    if (seconds == null) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+router.get('/leaderboard/user/:username', leaderboardLimiter, (req, res) => {
+    if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
+    if (!envBool('SHOW_LEADERBOARD')) {
+        return res.status(403).json({ error: "Leaderboard disabled" });
+    }
+
+    const username = typeof req.params.username === 'string' ? req.params.username.trim() : '';
+    if (!username) return res.status(400).json({ error: "Invalid username." });
+
+    const user = db.prepare('SELECT id, username, score_adjustment, withheld FROM users WHERE username = ?').get(username);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const cfg = getConfig();
+    const labs = cfg.labs || [];
+    const quizzes = cfg.quizzes || [];
+    const allChallenges = [
+        ...labs.map(l => ({ ...l, type: 'lab' })),
+        ...quizzes.map(q => ({ ...q, type: 'quiz' })),
+    ];
+
+    const { scoreMap, durationMap } = getBestSubmissionsMaps();
+    const entry = buildEntryForUser(user, allChallenges, labs, quizzes, scoreMap, durationMap);
+
+    const challenges = allChallenges.map(ch => {
+        let hideScore = false;
+        if (ch.type === 'quiz') {
+            hideScore = ch.show_score === false;
+        } else {
+            hideScore = ch.show_score === false;
+        }
+
+        if (user.withheld || hideScore) {
+            return {
+                id: ch.id,
+                title: ch.title,
+                type: ch.type,
+                hidden: hideScore,
+                withheld: Boolean(user.withheld),
+                best_score: null,
+                best_duration_seconds: null,
+                records: [],
+            };
+        }
+
+        const rows = db.prepare(`
+            SELECT score, max_score, timestamp, duration_seconds
+            FROM submissions
+            WHERE user_id = ? AND lab_id = ? AND status = 'completed'
+            ORDER BY timestamp ASC
+        `).all(user.id, ch.id);
+
+        const bestScore = scoreMap[user.id]?.[ch.id] ?? null;
+        const bestDuration = durationMap[user.id]?.[ch.id] ?? null;
+
+        return {
+            id: ch.id,
+            title: ch.title,
+            type: ch.type,
+            hidden: false,
+            withheld: false,
+            best_score: bestScore,
+            best_duration_seconds: bestDuration,
+            records: rows.map(row => ({
+                timestamp: row.timestamp,
+                score: row.score,
+                max_score: row.max_score,
+                duration_seconds: row.duration_seconds,
+                play_time: formatPlayTime(row.duration_seconds),
+            })),
+        };
+    });
+
+    res.json({
+        success: true,
+        user: {
+            username: user.username,
+            total_score: entry ? entry.total_score : 0,
+            total_time_seconds: entry ? entry.total_time_seconds : null,
+            withheld: Boolean(user.withheld),
+        },
+        challenges,
+    });
 });
 
 function formatHistoryRow(sub, cfg) {

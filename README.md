@@ -71,8 +71,48 @@ pka_file = "lab1_starter.pka"
 - `comp_start` and `comp_end`: Configures the global competition window in UTC. Format:Format: YYYY-MM-DDTHH:MM:SSZ. If omitted/unset, the lab is always open.
 - `time_limit_minutes`: Enforces a strict server-side deadline once the student clicks "Start Lab".
 - `pka_file`: The filename of the starting file (must be in `protected/pka/`).
-- `max_submissions`: The maximum times a student can submit.
+- `max_submissions`: The maximum times a student can submit (final lab attempts only; live-stream poll grades do not count toward this limit).
 - `rate_limit_count` / `rate_limit_window_seconds`: Rate limits requests
+
+### Live Streaming (`live_streaming`)
+
+Per-lab optional mode for grading a Packet Tracer file while the student is still working, instead of only at the end.
+
+```toml
+[[labs]]
+id = "lab_streaming"
+title = "Streaming Lab"
+live_streaming = true
+max_submissions = 0          # recommended: stream polls do not count, but 0 avoids confusion
+time_limit_minutes = 60
+show_score = true
+show_check_messages = true
+pka_file = "lab_starter.pka"
+```
+
+**Enable in `lab.conf`:** set `live_streaming = true` on a `[[labs]]` block.
+
+**Student workflow**
+1. Start the lab as usual.
+2. Pick their `.pka` / `.pkt` file when prompted (uses the browser **File System Access API**).
+3. Work in Packet Tracer and **save the file often**.
+4. CSSS checks the file every **2 minutes**. If the saved file changed since the last successful grade, it is sent for grading automatically.
+5. When finished, the student must click **Submit** for the final grade (this closes the lab session).
+
+**Browser requirement:** live streaming requires a **Chromium-based browser** (Chrome, Edge, or Opera). Firefox and Safari do not support the File System Access API.
+
+**Behavior**
+- Stream grades use the same checks and feedback settings as a normal submission (`show_score`, `show_check_messages`, etc.).
+- Intermediate stream grades are stored separately (`stream_poll` rows) and **do not** count toward `max_submissions`.
+- Only the final **Submit** closes the session and counts as a lab attempt.
+- If the student's score increases on a stream grade, the UI plays `gain.wav` and may show a notification.
+- Server rate limit: at most one accepted stream grade per user/lab every **115 seconds** (slightly under the 2-minute client interval).
+- If `RETAIN_PKA` / `RETAIN_XML` are enabled, captures are written only on the final Submit, not on stream polls.
+
+**Tips for instructors**
+- Tell students to save Packet Tracer frequently; grades only run when the saved file on disk changes.
+- Use `max_submissions = 0` (unlimited attempts) on streaming labs unless you intentionally want to cap how many times a student can *start* a new session.
+- Without live streaming, students select a file and click **Submit** once at the end (standard mode).
 
 ### Check Sources & Contexts
 Every config check requires a `source` and a `context`:

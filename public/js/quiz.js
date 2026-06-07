@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { escapeHtml, securePost } from './utils.js';
 import { clearBootstrapCache } from './auth.js';
+import { playFinishSound, ensureNotificationPermission } from './sounds.js';
 
 function setQuizLoading(loading) {
     document.getElementById('quiz-loading')?.classList.toggle('hidden', !loading);
@@ -80,6 +81,7 @@ export async function startQuizSession() {
         return;
     }
 
+    clearBootstrapCache();
     showQuizActive();
     const area = document.getElementById('quiz-questions-area');
     area.innerHTML = '';
@@ -216,6 +218,8 @@ function buildMatchingQuestion(optsDiv, q, idx) {
 }
 
 export async function submitQuiz() {
+    ensureNotificationPermission();
+
     if (state.quizTimerInterval) {
         clearInterval(state.quizTimerInterval);
         state.quizTimerInterval = null;
@@ -257,6 +261,11 @@ export async function submitQuiz() {
         alert(result.error);
         return;
     }
+
+    playFinishSound({
+        title: 'Quiz submitted',
+        body: 'Your quiz answers have been recorded.',
+    });
 
     area.querySelectorAll('input').forEach(inp => { inp.disabled = true; });
     area.querySelectorAll('.draggable-item').forEach(d => {

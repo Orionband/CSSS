@@ -31,6 +31,32 @@ function parseStrictAdminFlag(value) {
    return null;
 }
 
+async function verifyAdminCurrentPassword(req, current_password) {
+   if (!current_password) {
+       return { ok: false, status: 400, error: "Current password confirmation is required." };
+   }
+   const adminUser = db.prepare('SELECT password FROM users WHERE id = ?').get(req.session.userId);
+   if (!adminUser) {
+       return { ok: false, status: 401, error: "Unauthorized" };
+   }
+   const valid = await bcrypt.compare(String(current_password), adminUser.password);
+   if (!valid) {
+       return { ok: false, status: 403, error: "Current password is incorrect." };
+   }
+   return { ok: true };
+}
+
+function countOwners() {
+   return db.prepare('SELECT COUNT(*) as c FROM users WHERE is_owner = 1').get().c;
+}
+
+function disconnectUserSockets(userId) {
+   const userSockets = global.activeUserSockets && global.activeUserSockets.get(userId);
+   if (userSockets) {
+       userSockets.forEach(s => s.disconnect(true));
+   }
+}
+
 const adminOnly = (req, res, next) => {
    if (!req.session || !req.session.userId) return res.status(401).json({ error: "Unauthorized" });
    const user = db.prepare('SELECT is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
@@ -128,12 +154,15 @@ router.delete('/users/:id', (req, res) => {
    if (targetId === req.session.userId) return res.status(400).json({ error: "Cannot delete yourself." });
 
    try {
-       const existing = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(targetId);
+       const existing = db.prepare('SELECT id, is_admin, is_owner FROM users WHERE id = ?').get(targetId);
        if (!existing) {
            return res.status(404).json({ error: "User not found." });
        }
        if (existing.is_admin === 1 && !req.isOwner) {
            return res.status(403).json({ error: "Cannot delete another admin user." });
+       }
+       if (existing.is_owner === 1 && countOwners() <= 1) {
+           return res.status(403).json({ error: "Cannot delete the only owner account." });
        }
 
        db.transaction(() => {
@@ -142,11 +171,7 @@ router.delete('/users/:id', (req, res) => {
            db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(targetId);
        })();
 
-       // Terminate any active WebSocket connections for the deleted user
-       const userSockets = global.activeUserSockets && global.activeUserSockets.get(targetId);
-       if (userSockets) {
-           userSockets.forEach(s => s.disconnect(true));
-       }
+       disconnectUserSockets(targetId);
 
        console.log(`Admin id=${req.session.userId} deleted user id=${targetId}`);
        res.json({ success: true });
@@ -163,16 +188,9 @@ router.post('/users/:id/password', async (req, res) => {
        return res.status(400).json({ error: "Invalid user id." });
    }
 
-   if (!current_password) {
-       return res.status(400).json({ error: "Current password confirmation is required to reset passwords." });
-   }
-   const adminUser = db.prepare('SELECT password FROM users WHERE id = ?').get(req.session.userId);
-   if (!adminUser) {
-       return res.status(401).json({ error: "Unauthorized" });
-   }
-   const currentPwdValid = await bcrypt.compare(String(current_password), adminUser.password);
-   if (!currentPwdValid) {
-       return res.status(403).json({ error: "Current password is incorrect." });
+   const pwdConfirm = await verifyAdminCurrentPassword(req, current_password);
+   if (!pwdConfirm.ok) {
+       return res.status(pwdConfirm.status).json({ error: pwdConfirm.error });
    }
 
    if (targetId !== req.session.userId) {
@@ -209,10 +227,7 @@ router.post('/users/:id/password', async (req, res) => {
            ).run(targetId).changes;
        })();
 
-       const userSockets = global.activeUserSockets && global.activeUserSockets.get(targetId);
-       if (userSockets) {
-           userSockets.forEach(s => s.disconnect(true));
-       }
+       disconnectUserSockets(targetId);
 
        console.log(`Admin id=${req.session.userId} reset password for user id=${targetId}, sessions removed=${sessionsRemoved}.`);
        res.json({ success: true });
@@ -230,32 +245,96 @@ router.post('/users/:id/score', (req, res) => {
    if (!Number.isFinite(targetId)) {
        return res.status(400).json({ error: "Invalid user id." });
    }
-   if (targetId === req.session.userId) {
-       return res.status(400).json({ error: "Cannot modify your own score modifiers." });
-   }
    const targetUser = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(targetId);
    if (!targetUser) {
        return res.status(404).json({ error: "User not found." });
    }
-   if (targetUser.is_admin === 1 && !req.isOwner) {
+   if (targetUser.is_admin === 1 && targetId !== req.session.userId && !req.isOwner) {
        return res.status(403).json({ error: "Cannot modify another admin's score modifiers." });
    }
    const { adjustment, withheld } = req.body;
    
-   const adjInt = parseInt(adjustment) || 0;
+   let adjInt = null;
+  if ('adjustment' in req.body) {
+    adjInt = parseInt(adjustment) || 0;
+  }
    const withheldInt = parseStrictAdminFlag(withheld);
    if (withheldInt === null) {
        return res.status(400).json({ error: "withheld must be a boolean." });
    }
 
    try {
-       const info = db.prepare('UPDATE users SET score_adjustment = ?, withheld = ? WHERE id = ?').run(adjInt, withheldInt, targetId);
+       const updates = [];
+       const params = [];
+       if (adjInt !== null) { updates.push('score_adjustment = ?'); params.push(adjInt); }
+       if (withheld !== undefined) { updates.push('withheld = ?'); params.push(withheldInt); }
+       if (!updates.length) {
+           return res.status(400).json({ error: "No fields to update." });
+       }
+       params.push(targetId);
+       const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+       const info = db.prepare(sql).run(...params);
        if (info.changes === 0) {
            return res.status(404).json({ error: "User not found." });
        }
        res.json({ success: true });
    } catch (e) {
+       console.error(`Score modifier update failed for user id=${targetId}:`, e.message);
        res.status(500).json({ error: "Failed to update score modifiers." });
+   }
+});
+
+router.post('/users/:id/admin', async (req, res) => {
+   if (!req.isOwner) {
+       return res.status(403).json({ error: "Only the owner can change admin privileges." });
+   }
+
+   const targetId = parseInt(req.params.id, 10);
+   if (!Number.isFinite(targetId)) {
+       return res.status(400).json({ error: "Invalid user id." });
+   }
+   if (targetId === req.session.userId) {
+       return res.status(400).json({ error: "Cannot change your own admin privileges." });
+   }
+
+   const adminFlag = parseStrictAdminFlag(req.body.is_admin);
+   if (adminFlag === null) {
+       return res.status(400).json({ error: "is_admin must be a boolean." });
+   }
+
+   const pwdConfirm = await verifyAdminCurrentPassword(req, req.body.current_password);
+   if (!pwdConfirm.ok) {
+       return res.status(pwdConfirm.status).json({ error: pwdConfirm.error });
+   }
+
+   const targetUser = db.prepare('SELECT id, is_admin, is_owner FROM users WHERE id = ?').get(targetId);
+   if (!targetUser) {
+       return res.status(404).json({ error: "User not found." });
+   }
+   if (targetUser.is_owner === 1) {
+       return res.status(403).json({ error: "Cannot change admin privileges for an owner account." });
+   }
+   if (targetUser.is_admin === adminFlag) {
+       return res.json({ success: true });
+   }
+
+   try {
+       db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(adminFlag, targetId);
+
+       if (adminFlag === 0) {
+           const sessionsRemoved = db.prepare(
+               "DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?"
+           ).run(targetId).changes;
+           disconnectUserSockets(targetId);
+           console.log(`Owner id=${req.session.userId} revoked admin for user id=${targetId}, sessions removed=${sessionsRemoved}.`);
+       } else {
+           console.log(`Owner id=${req.session.userId} granted admin to user id=${targetId}.`);
+       }
+
+       res.json({ success: true });
+   } catch (e) {
+       console.error(`Admin privilege update failed for user id=${targetId}:`, e.message);
+       res.status(500).json({ error: "Failed to update admin privileges." });
    }
 });
 
@@ -288,11 +367,9 @@ router.delete('/submissions/:id', (req, res) => {
        if (sub.status === 'in_progress') {
            return res.status(400).json({ error: "Cannot delete a submission that is currently in progress. Wait for it to complete or expire." });
        }
-       if (sub.user_id === req.session.userId) {
-           return res.status(403).json({ error: "Cannot delete your own submissions. This would circumvent attempt limits." });
-       }
        db.prepare('DELETE FROM submissions WHERE id = ?').run(subId);
-       console.log(`Admin id=${req.session.userId} deleted submission id=${subId} (user_id=${sub.user_id}, lab_id=${sub.lab_id})`);
+       const selfNote = sub.user_id === req.session.userId ? ' (own submission)' : '';
+       console.log(`Admin id=${req.session.userId} deleted submission id=${subId} (user_id=${sub.user_id}, lab_id=${sub.lab_id})${selfNote}`);
        res.json({ success: true });
    } catch (e) {
        res.status(500).json({ error: "Failed to delete submission." });

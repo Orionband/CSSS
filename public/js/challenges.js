@@ -98,19 +98,26 @@ function renderGrid(container, challenges, kind) {
 
         const points = ch.points ?? 0;
 
+        const active = ch.session_active === true;
         const card = document.createElement('a');
 
         card.href = `${page}?id=${encodeURIComponent(ch.id)}`;
 
-        card.className = 'challenge-card';
+        card.className = 'challenge-card' + (active ? ' challenge-card-active' : '');
 
-
+        const ctaLabel = active ? 'Continue' : 'Start';
+        const statusBadge = active
+            ? '<span class="challenge-status-badge"><span class="challenge-status-dot" aria-hidden="true"></span>In progress</span>'
+            : '';
 
         card.innerHTML = `
 
             <div class="challenge-card-body">
 
-                <span class="challenge-badge">${label}</span>
+                <div class="challenge-badge-row">
+                    <span class="challenge-badge">${label}</span>
+                    ${statusBadge}
+                </div>
 
                 <h3 class="challenge-title">${escapeHtml(ch.title)}</h3>
 
@@ -120,7 +127,7 @@ function renderGrid(container, challenges, kind) {
 
                 <span class="challenge-points-badge">${points} pt${points === 1 ? '' : 's'}</span>
 
-                <span class="challenge-cta">Start<span class="challenge-cta-arrow" aria-hidden="true">→</span></span>
+                <span class="challenge-cta">${ctaLabel}<span class="challenge-cta-arrow" aria-hidden="true">→</span></span>
 
             </div>
 

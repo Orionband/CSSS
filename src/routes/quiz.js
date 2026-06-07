@@ -317,14 +317,27 @@ router.post('/:id/start', quizStartLimiter, (req, res) => {
         }
         const result = db.prepare(sql).run(...params);
         if (result.changes === 0) {
-            const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
-            if (maxAttempts > 0 && attempts >= maxAttempts) {
-                return { error: "Maximum attempts reached.", code: 403 };
+            const hasActive = db.prepare(
+                "SELECT 1 AS ok FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'quiz' LIMIT 1"
+            ).get(req.session.userId, quiz.id);
+            if (hasActive) {
+                return { error: "An active quiz session already exists.", code: 409 };
             }
             if (rateLimitCount > 0) {
-                return { error: "Rate limit exceeded. Please wait before starting another attempt.", code: 429 };
+                const recent = db.prepare(
+                    "SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ? AND timestamp > datetime('now', '-' || ? || ' seconds')"
+                ).get(req.session.userId, quiz.id, rateLimitWindow).c;
+                if (recent >= rateLimitCount) {
+                    return { error: "Rate limit exceeded. Please wait before starting another attempt.", code: 429 };
+                }
             }
-            return { error: "An active quiz session already exists.", code: 409 };
+            if (maxAttempts > 0) {
+                const attempts = db.prepare('SELECT COUNT(*) as c FROM submissions WHERE user_id = ? AND lab_id = ?').get(req.session.userId, quiz.id).c;
+                if (attempts >= maxAttempts) {
+                    return { error: "Maximum attempts reached.", code: 403 };
+                }
+            }
+            return { error: "Could not start quiz session.", code: 409 };
         }
         return { success: true };
     });

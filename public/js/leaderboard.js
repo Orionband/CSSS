@@ -41,6 +41,11 @@ export async function loadLeaderboard() {
 
     data.leaderboard.forEach((entry, index) => {
         const tr = document.createElement('tr');
+        tr.className = 'lb-row-clickable';
+        tr.title = `View ${entry.username} detail`;
+        tr.addEventListener('click', () => {
+            location.href = `/leaderboard/user?u=${encodeURIComponent(entry.username)}`;
+        });
         let html = `<td>#${index + 1}</td><td>${escapeHtml(entry.username)}</td>`;
         data.labs.forEach(l => {
             const score = entry.scores[l.id] || 0;

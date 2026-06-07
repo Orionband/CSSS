@@ -53,18 +53,29 @@
                         <h2 id="lab-active-title">Lab In Progress</h2>
                         <div class="panel-header-actions">
                             <div id="lab-timer" class="quiz-timer"></div>
-                            <a href="/challenges" class="btn-ghost">&larr; Back</a>
                         </div>
                     </div>
                     <div id="lab-download-area" class="hidden mb-20">
                         <a id="lab-download-btn" class="lab-download-link">Download Lab File</a>
                     </div>
-                    <p>Upload your completed Packet Tracer file to be graded.</p>
-                    <div class="upload-area" id="upload-area-box">
+                    <p id="lab-upload-instructions">Select your Packet Tracer file, then click Submit to be graded.</p>
+                    <div id="stream-save-note" class="stream-save-note hidden"></div>
+                    <div id="stream-unsupported" class="stream-unsupported hidden"></div>
+                    <div class="upload-area hidden" id="upload-area-box">
                         <div class="upload-icon">+</div>
                         <div class="upload-title">Click to Select File</div>
                         <div class="upload-hint">.pka or .pkt files supported</div>
                         <input type="file" id="f" class="hidden" accept=".pka,.pkt">
+                    </div>
+                    <div class="upload-area stream-pick-area hidden" id="stream-pick-area">
+                        <div class="upload-icon stream-icon" aria-hidden="true">&#8635;</div>
+                        <div class="upload-title">Pick File to Stream</div>
+                        <div class="upload-hint">Uses live file access — save Packet Tracer often</div>
+                        <div id="stream-file-name" class="stream-file-name"></div>
+                        <div id="stream-next-check" class="stream-next-check hidden"></div>
+                    </div>
+                    <div class="lab-submit-row">
+                        <button type="button" id="btn-lab-submit" class="intro-action" disabled title="Final submission — confirms before grading">Submit</button>
                     </div>
                     <div id="progress-container"><div id="progress-bar"></div></div>
                     <div id="status"></div>

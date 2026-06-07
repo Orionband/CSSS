@@ -45,10 +45,11 @@ const server = http.createServer(app);
 
 const cfgInitial = getConfig();
 const globalMaxUploadMB = maxUploadMbFromLabs(cfgInitial.labs);
+const SOCKET_MAX_UPLOAD_MB = 60;
 const socketMaxUploadMB = Math.min(
     globalMaxUploadMB,
-    resolveUploadMb(process.env.DEFAULT_MAX_UPLOAD_MB, 50),
-    50 // hard cap on Socket.IO packet size
+    resolveUploadMb(process.env.DEFAULT_MAX_UPLOAD_MB, SOCKET_MAX_UPLOAD_MB),
+    SOCKET_MAX_UPLOAD_MB // hard cap on Socket.IO packet size
 );
 
 const io = new Server(server, {
@@ -157,6 +158,7 @@ app.get('/', sendPage('index.html'));
 app.get('/challenges', sendPage('challenges.html'));
 app.get('/history', sendPage('history.html'));
 app.get('/leaderboard', sendPage('leaderboard.html'));
+app.get('/leaderboard/user', sendPage('leaderboard-user.html'));
 app.get('/lab', sendPage('lab.html'));
 app.get('/quiz', sendPage('quiz.html'));
 app.get('/admin', (req, res) => {
@@ -187,6 +189,7 @@ const LEGACY_HTML_REDIRECTS = {
    'challenges.html': '/challenges',
    'history.html': '/history',
    'leaderboard.html': '/leaderboard',
+   'leaderboard-user.html': '/leaderboard/user',
    'lab.html': '/lab',
    'quiz.html': '/quiz',
    'admin.html': '/admin',
@@ -243,9 +246,24 @@ function labConfigForWorker(lab) {
    return JSON.parse(JSON.stringify(lab));
 }
 
+const STREAM_MIN_INTERVAL_MS = 115 * 1000;
+const lastStreamGradeAt = new Map();
+
+function streamGradeKey(userId, labId) {
+   return `${userId}:${labId}`;
+}
+
+function parsePacketBool(value) {
+   return value === true;
+}
+
 function dispatchGradingTask(task) {
-   const { socket, lockKey, socketUser, targetLab, inProgressId, maxXmlMb, tempFilePath, fileBuffer, transferList } = task;
-   const retainXml = process.env.RETAIN_XML === 'true';
+   const {
+       socket, lockKey, socketUser, targetLab, inProgressId, maxXmlMb,
+       tempFilePath, fileBuffer, transferList, streaming, finalSubmit, sessionTimestamp,
+   } = task;
+   const isStreamPoll = streaming && !finalSubmit;
+   const retainXml = process.env.RETAIN_XML === 'true' && !isStreamPoll;
 
    let finished = false;
    const finishTask = () => {
@@ -277,17 +295,37 @@ function dispatchGradingTask(task) {
                    const timestamp = Date.now();
                    const capturesDir = path.join(__dirname, '../captures');
 
+                   const detailsJson = JSON.stringify(grading.serverBreakdown);
                    let scoreRecorded = true;
-                   if (inProgressId) {
-                       const updateResult = db.prepare(
-                           "UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed' WHERE id = ? AND status = 'in_progress'"
-                       ).run(grading.total, grading.max, JSON.stringify(grading.serverBreakdown), inProgressId);
-                       if (updateResult.changes === 0) {
-                           scoreRecorded = false;
-                       }
+
+                   if (isStreamPoll) {
+                       const durationSeconds = sessionTimestamp
+                           ? elapsedSecondsSince(sessionTimestamp)
+                           : null;
+                       db.prepare(
+                           "INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type, status, duration_seconds, stream_poll) VALUES (?, ?, ?, ?, ?, ?, 'lab', 'completed', ?, 1)"
+                       ).run(
+                           socketUser.id,
+                           socketUser.unique_id,
+                           targetLab.id,
+                           grading.total,
+                           grading.max,
+                           detailsJson,
+                           durationSeconds
+                       );
+                       lastStreamGradeAt.set(streamGradeKey(socketUser.id, targetLab.id), Date.now());
+                   } else if (inProgressId) {
+                       scoreRecorded = db.recordLabGradeResult(
+                           socketUser.id,
+                           targetLab.id,
+                           inProgressId,
+                           grading.total,
+                           grading.max,
+                           detailsJson
+                       );
                    } else {
                        db.prepare('INSERT INTO submissions (user_id, unique_id, lab_id, score, max_score, details, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-                           .run(socketUser.id, socketUser.unique_id, targetLab.id, grading.total, grading.max, JSON.stringify(grading.serverBreakdown), 'lab', 'completed');
+                           .run(socketUser.id, socketUser.unique_id, targetLab.id, grading.total, grading.max, detailsJson, 'lab', 'completed');
                    }
 
                    if (!scoreRecorded) {
@@ -295,7 +333,7 @@ function dispatchGradingTask(task) {
                        return;
                    }
 
-                   if (process.env.RETAIN_PKA === 'true' || retainXml) {
+                   if ((process.env.RETAIN_PKA === 'true' && !isStreamPoll) || retainXml) {
                        if (!fs.existsSync(capturesDir)) fs.mkdirSync(capturesDir, { recursive: true });
                        const safeTitle = targetLab.title.replace(/[^a-z0-9]/gi, '_');
                        const baseName = `${safeTitle}_${socketUser.unique_id}_${timestamp}`;
@@ -309,7 +347,12 @@ function dispatchGradingTask(task) {
                    }
 
                    const payload = {
-                       total: grading.total, max: grading.max, clientBreakdown: grading.clientBreakdown, show_score: grading.show_score
+                       total: grading.total,
+                       max: grading.max,
+                       clientBreakdown: grading.clientBreakdown,
+                       show_score: grading.show_score,
+                       streaming: isStreamPoll,
+                       final: Boolean(finalSubmit),
                    };
 
                    if (!grading.show_score) { delete payload.total; delete payload.max; }
@@ -335,7 +378,7 @@ function dispatchGradingTask(task) {
 // Sweepers
 setInterval(() => {
    try {
-       db.prepare("DELETE FROM active_locks WHERE timestamp < datetime('now', '-5 minutes')").run();
+       db.clearStaleLocks();
        
        const cfg = getConfig();
        const labs = cfg.labs || [];
@@ -605,6 +648,22 @@ io.on('connection', (socket) => {
                }
            }
 
+           const streaming = parsePacketBool(packet.streaming);
+           const finalSubmit = parsePacketBool(packet.final);
+
+           if (streaming && targetLab.live_streaming !== true) {
+               return socket.emit('err', 'Live streaming is not enabled for this lab.');
+           }
+
+           if (streaming && !finalSubmit) {
+               const streamKey = streamGradeKey(userId, labId);
+               const lastAt = lastStreamGradeAt.get(streamKey);
+               if (lastAt && Date.now() - lastAt < STREAM_MIN_INTERVAL_MS) {
+                   const waitSec = Math.ceil((STREAM_MIN_INTERVAL_MS - (Date.now() - lastAt)) / 1000);
+                   return socket.emit('err', `Please wait ${waitSec}s before the next stream grade.`);
+               }
+           }
+
            const result = gradeAdmission.enqueue({
                socket,
                userId,
@@ -730,13 +789,25 @@ io.on('connection', (socket) => {
                }
            }
            inProgressId = activeSession.id;
+           const streaming = parsePacketBool(packet.streaming);
+           const finalSubmit = parsePacketBool(packet.final);
+           const isStreamPoll = streaming && !finalSubmit;
+
+           if (streaming && targetLab.live_streaming !== true) {
+               db.releaseLock(lockKey);
+               notifyGradingSlotsAvailable();
+               return socket.emit('err', 'Live streaming is not enabled for this lab.');
+           }
+
            const uploadDurationSeconds = elapsedSecondsSince(activeSession.timestamp);
-           db.prepare("UPDATE submissions SET duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
-               .run(uploadDurationSeconds, inProgressId);
+           if (!isStreamPoll) {
+               db.prepare("UPDATE submissions SET duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
+                   .run(uploadDurationSeconds, inProgressId);
+           }
 
            const maxXmlMb = targetLab.max_xml_output_mb || 20;
 
-           const retainPka = process.env.RETAIN_PKA === 'true';
+           const retainPka = process.env.RETAIN_PKA === 'true' && !isStreamPoll;
            const fileBuffer = Buffer.isBuffer(fileData) ? fileData : Buffer.from(fileData);
 
            const task = {
@@ -749,6 +820,9 @@ io.on('connection', (socket) => {
                tempFilePath: null,
                fileBuffer: null,
                transferList: [],
+               streaming,
+               finalSubmit,
+               sessionTimestamp: activeSession.timestamp,
            };
 
            if (retainPka) {

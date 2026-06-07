@@ -19,6 +19,11 @@ function bindAdminUserButtons() {
             e.target.dataset.id, e.target.dataset.name, e.target.dataset.adj, e.target.dataset.withheld
         ));
     });
+    document.querySelectorAll('.btn-admin-role').forEach(btn => {
+        btn.addEventListener('click', (e) => adminPromptRole(
+            e.target.dataset.id, e.target.dataset.name, e.target.dataset.isadmin === '1'
+        ));
+    });
 }
 
 function appendAdminUsersLoadMore(hasMore) {
@@ -39,14 +44,24 @@ function appendAdminUsersLoadMore(hasMore) {
     }
 }
 
+function adminRoleButtonHtml(u) {
+    if (!window.isOwner || u.is_owner || u.id === window.currentUserId) return '';
+    if (u.is_admin) {
+        return `<button class="btn-small btn-secondary btn-admin-role" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}" data-isadmin="1">Revoke Admin</button>`;
+    }
+    return `<button class="btn-small btn-secondary btn-admin-role" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}" data-isadmin="0">Grant Admin</button>`;
+}
+
 function renderAdminUserRows(users, usersBody, lbBody) {
     users.forEach(u => {
         const row = document.createElement('tr');
+        const canDelete = u.id !== window.currentUserId && (!u.is_admin || window.isOwner);
         const actionsHtml = `
             <div class="action-btns">
                 <button class="btn-small btn-secondary btn-admin-subs" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}">View Submissions</button>
                 <button class="btn-small btn-secondary btn-admin-pass" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}">Reset Password</button>
-                <button class="btn-small btn-danger btn-admin-del" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}">Delete User</button>
+                ${adminRoleButtonHtml(u)}
+                ${canDelete ? `<button class="btn-small btn-danger btn-admin-del" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}">Delete User</button>` : ''}
             </div>
         `;
         row.innerHTML = `
@@ -132,8 +147,11 @@ async function adminExecuteCreateUser() {
 function adminPromptPassword(id, username) {
     showModal(`
         <h2 class="text-accent mb-20">Reset Password: ${escapeHtml(username)}</h2>
+        <div class="mb-15">
+            <input type="password" id="admin-current-pass" class="field-input" placeholder="Your Current Password" autocomplete="current-password">
+        </div>
         <div class="mb-20">
-            <input type="password" id="admin-reset-pass" class="field-input" placeholder="New Password">
+            <input type="password" id="admin-reset-pass" class="field-input" placeholder="New Password" autocomplete="new-password">
             <div class="password-hint">Min 8 characters, 1 uppercase letter, 1 number, 1 symbol</div>
         </div>
         <button id="btn-admin-reset-pass-exec" data-id="${id}" class="btn-block">Reset Password</button>
@@ -143,7 +161,8 @@ function adminPromptPassword(id, username) {
 
 async function adminExecutePassword(id) {
     const password = document.getElementById('admin-reset-pass').value;
-    const res = await securePost(`/api/admin/users/${id}/password`, { password });
+    const current_password = document.getElementById('admin-current-pass').value;
+    const res = await securePost(`/api/admin/users/${id}/password`, { password, current_password });
     const data = await res.json();
     if (data.error) alert(data.error);
     else { alert('Password updated.'); closeModal(); }
@@ -169,6 +188,30 @@ async function adminExecuteScore(id) {
     const adjustment = document.getElementById('admin-score-adj').value;
     const withheld = document.getElementById('admin-score-withhold').checked;
     const res = await securePost(`/api/admin/users/${id}/score`, { adjustment, withheld });
+    const data = await res.json();
+    if (data.error) alert(data.error);
+    else { closeModal(); loadAdminPanel(); }
+}
+
+function adminPromptRole(id, username, isAdmin) {
+    const action = isAdmin ? 'Revoke Admin' : 'Grant Admin';
+    showModal(`
+        <h2 class="text-accent mb-20">${action}: ${escapeHtml(username)}</h2>
+        <p class="text-muted mb-20">${isAdmin
+            ? 'This user will lose admin panel access and their active sessions will be ended.'
+            : 'This user will gain full admin panel access (except owner-only actions).'
+        }</p>
+        <div class="mb-20">
+            <input type="password" id="admin-role-current-pass" class="field-input" placeholder="Your Current Password" autocomplete="current-password">
+        </div>
+        <button id="btn-admin-role-exec" data-id="${id}" data-isadmin="${isAdmin ? '0' : '1'}" class="btn-block">${action}</button>
+    `);
+    document.getElementById('btn-admin-role-exec').addEventListener('click', (e) => adminExecuteRole(e.target.dataset.id, e.target.dataset.isadmin === '1'));
+}
+
+async function adminExecuteRole(id, grantAdmin) {
+    const current_password = document.getElementById('admin-role-current-pass').value;
+    const res = await securePost(`/api/admin/users/${id}/admin`, { is_admin: grantAdmin, current_password });
     const data = await res.json();
     if (data.error) alert(data.error);
     else { closeModal(); loadAdminPanel(); }

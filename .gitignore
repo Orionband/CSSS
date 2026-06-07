@@ -15,3 +15,7 @@ VULN-FINDINGS.md
 VULN-FINDINGS.json
 TRIAGE.json
 TRIAGE.md
+.triage-state/
+.cursor/
+CLAUDE.md
+testing/
