@@ -2,7 +2,19 @@ import { escapeHtml, securePost, showModal, closeModal } from './utils.js';
 
 const ADMIN_USERS_LIMIT = 100;
 const ADMIN_SUBS_LIMIT = 100;
+const AUDIT_LOG_LIMIT = 50;
 let adminUsersOffset = 0;
+let auditLogOffset = 0;
+
+const AUDIT_EVENT_LABELS = {
+    account_created: 'Account created',
+    password_changed: 'Password changed',
+    admin_granted: 'Admin granted',
+    admin_revoked: 'Admin revoked',
+    owner_granted: 'Owner granted',
+    user_deleted: 'User deleted',
+    server_error: 'Server error',
+};
 
 function bindAdminUserButtons() {
     document.querySelectorAll('.btn-admin-subs').forEach(btn => {
@@ -179,6 +191,9 @@ function adminPromptScore(id, username, currentAdj, currentWithheld) {
         <div class="mb-25">
             <label class="custom-label"><input type="checkbox" id="admin-score-withhold" ${isWithheld ? 'checked' : ''}><span class="checkmark"></span> Withhold from Leaderboard</label>
         </div>
+        <div class="mb-20">
+            <input type="password" id="admin-score-current-pass" class="field-input" placeholder="Your Current Password" autocomplete="current-password">
+        </div>
         <button id="btn-admin-score-exec" data-id="${id}" class="btn-block">Save Adjustments</button>
     `);
     document.getElementById('btn-admin-score-exec').addEventListener('click', (e) => adminExecuteScore(e.target.dataset.id));
@@ -187,7 +202,8 @@ function adminPromptScore(id, username, currentAdj, currentWithheld) {
 async function adminExecuteScore(id) {
     const adjustment = document.getElementById('admin-score-adj').value;
     const withheld = document.getElementById('admin-score-withhold').checked;
-    const res = await securePost(`/api/admin/users/${id}/score`, { adjustment, withheld });
+    const current_password = document.getElementById('admin-score-current-pass').value;
+    const res = await securePost(`/api/admin/users/${id}/score`, { adjustment, withheld, current_password });
     const data = await res.json();
     if (data.error) alert(data.error);
     else { closeModal(); loadAdminPanel(); }
@@ -305,4 +321,89 @@ async function adminDeleteSubmission(subId, userId, username) {
         if (data.error) alert(data.error);
         else adminViewSubmissions(userId, username);
     }
+}
+
+function formatAuditActor(entry) {
+    if (entry.actor_username) return escapeHtml(entry.actor_username);
+    if (entry.actor_user_id) return `#${escapeHtml(String(entry.actor_user_id))}`;
+    return '—';
+}
+
+function formatAuditTarget(entry) {
+    if (entry.target_username) return escapeHtml(entry.target_username);
+    if (entry.target_user_id) return `#${escapeHtml(String(entry.target_user_id))}`;
+    return '—';
+}
+
+function auditRowHtml(entry) {
+    const label = AUDIT_EVENT_LABELS[entry.event_type] || escapeHtml(entry.event_type);
+    const time = entry.created_at ? new Date(entry.created_at).toLocaleString() : '—';
+    return `
+        <tr>
+            <td>${escapeHtml(time)}</td>
+            <td>${escapeHtml(label)}</td>
+            <td>${formatAuditActor(entry)}</td>
+            <td>${formatAuditTarget(entry)}</td>
+            <td>${entry.lab_id ? escapeHtml(entry.lab_id) : '—'}</td>
+            <td>${entry.source ? escapeHtml(entry.source) : '—'}</td>
+            <td class="audit-detail-cell">${entry.detail ? escapeHtml(entry.detail) : '—'}</td>
+        </tr>
+    `;
+}
+
+function appendAuditLoadMore(hasMore) {
+    let btn = document.getElementById('audit-log-load-more');
+    if (!hasMore) {
+        if (btn) btn.remove();
+        return;
+    }
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'audit-log-load-more';
+        btn.className = 'btn-secondary btn-small';
+        btn.style.marginTop = '12px';
+        btn.textContent = 'Load more entries';
+        btn.addEventListener('click', () => loadAuditLog(true));
+        document.getElementById('admin-panel-audit').appendChild(btn);
+    }
+}
+
+export async function loadAuditLog(append = false) {
+    const tbody = document.getElementById('admin-audit-body');
+    if (!tbody) return;
+
+    const filterEl = document.getElementById('audit-event-filter');
+    const eventType = filterEl ? filterEl.value : '';
+    if (!append) auditLogOffset = 0;
+
+    const params = new URLSearchParams({
+        limit: String(AUDIT_LOG_LIMIT),
+        offset: String(auditLogOffset),
+    });
+    if (eventType) params.set('event_type', eventType);
+
+    const res = await fetch(`/api/admin/audit-log?${params}`);
+    if (!res.ok) {
+        if (!append) tbody.innerHTML = `<tr><td colspan="7" class="error-center">Error loading audit log.</td></tr>`;
+        return;
+    }
+    const data = await res.json();
+
+    if (!append) tbody.innerHTML = '';
+
+    if (data.entries.length === 0 && !append) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px;">No audit entries yet.</td></tr>`;
+        appendAuditLoadMore(false);
+        return;
+    }
+
+    data.entries.forEach(entry => {
+        tbody.insertAdjacentHTML('beforeend', auditRowHtml(entry));
+    });
+
+    if (data.hasMore) {
+        auditLogOffset = data.offset + data.entries.length;
+    }
+    appendAuditLoadMore(data.hasMore);
 }

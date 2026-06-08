@@ -28,6 +28,7 @@ function restrictEnvFilePermissions(envPath) {
 const bcrypt = require('bcryptjs');
 const { sanitizeUsername, sanitizeEmail } = require('./src/sanitizeUserFields');
 const { validatePasswordPolicy } = require('./src/passwordPolicy');
+const { logAccountCreated, logPasswordChanged, logAdminChange, logOwnerGranted } = require('./src/auditLog');
 
 const readline = require('readline').createInterface({
     input: process.stdin,
@@ -158,14 +159,45 @@ const askProxyType = async () => {
             const hash = bcrypt.hashSync(adminPass, 10);
             const uid = crypto.randomBytes(6).toString('hex').toUpperCase().match(/.{1,4}/g).join('-');
             
-            const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(adminUser);
+            const existing = db.prepare('SELECT id, is_admin, is_owner FROM users WHERE username = ?').get(adminUser);
             if (existing) {
                 db.prepare('UPDATE users SET password = ?, email = ?, is_admin = 1, is_owner = 1 WHERE id = ?').run(hash, adminEmail || 'admin@localhost', existing.id);
+                logPasswordChanged({
+                    actorUserId: null,
+                    targetUserId: existing.id,
+                    targetUsername: adminUser,
+                    source: 'quickstart',
+                });
+                if (!existing.is_owner) {
+                    logOwnerGranted({
+                        actorUserId: null,
+                        targetUserId: existing.id,
+                        username: adminUser,
+                        source: 'quickstart',
+                    });
+                }
+                if (!existing.is_admin) {
+                    logAdminChange({
+                        granted: true,
+                        actorUserId: null,
+                        targetUserId: existing.id,
+                        username: adminUser,
+                        source: 'quickstart',
+                    });
+                }
                 console.log(`\nSUCCESS: Existing user '${adminUser}' was updated and promoted to Owner.`);
                 console.log('This account has full admin access and can create other admin accounts.');
             } else {
-                db.prepare('INSERT INTO users (username, email, password, unique_id, is_admin, is_owner) VALUES (?, ?, ?, ?, 1, 1)')
+                const info = db.prepare('INSERT INTO users (username, email, password, unique_id, is_admin, is_owner) VALUES (?, ?, ?, ?, 1, 1)')
                   .run(adminUser, adminEmail || 'admin@localhost', hash, uid);
+                logAccountCreated({
+                    actorUserId: null,
+                    targetUserId: info.lastInsertRowid,
+                    username: adminUser,
+                    isAdmin: true,
+                    isOwner: true,
+                    source: 'quickstart',
+                });
                 console.log(`\nSUCCESS: Owner user '${adminUser}' created successfully.`);
                 console.log('This account has full admin access and can create other admin accounts.');
             }

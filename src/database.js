@@ -110,7 +110,9 @@ try { db.prepare('SELECT owner_pid FROM active_locks LIMIT 1').get(); }
 catch (e) { db.prepare('ALTER TABLE active_locks ADD COLUMN owner_pid INTEGER').run(); }
 
 db.clearStaleLocks = function() {
-    db.prepare(`DELETE FROM active_locks WHERE timestamp < datetime('now', '-${LOCK_STALE_MINUTES} minutes')`).run();
+    db.prepare(
+        `DELETE FROM active_locks WHERE timestamp < datetime('now', '-${LOCK_STALE_MINUTES} minutes') AND (owner_pid IS NULL OR owner_pid != ?)`
+    ).run(SERVER_PID);
 
     const rows = db.prepare('SELECT lock_key, owner_pid FROM active_locks WHERE owner_pid IS NOT NULL').all();
     for (const row of rows) {

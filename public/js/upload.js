@@ -1,10 +1,11 @@
 import { state } from './state.js';
 import { renderLabResults } from './lab-results.js';
-import { freezeLabTimer } from './lab-timer.js';
+import { freezeLabTimer, unfreezeLabTimer } from './lab-timer.js';
 import { clearBootstrapCache } from './auth.js';
-import { playFinishSound, playGainSound, ensureNotificationPermission } from './sounds.js';
+import { playFinishSound, playGainSound, playLossSound, ensureNotificationPermission } from './sounds.js';
 
 const STREAM_INTERVAL_MS = 120 * 1000;
+const STREAM_HASH_POLL_MS = 20 * 1000;
 const STREAM_DB_NAME = 'csss-stream-handles';
 const STREAM_DB_STORE = 'handles';
 
@@ -17,10 +18,13 @@ let streamPickListenerBound = false;
 let pendingUpload = null;
 
 let streamFileHandle = null;
-let streamTimerId = null;
+let streamCooldownTimerId = null;
+let streamHashPollId = null;
 let streamCountdownIntervalId = null;
-let nextStreamCheckAt = 0;
+let nextStreamWindowAt = 0;
+let streamWatchActive = false;
 let lastFileHash = null;
+let lastUploadedHash = null;
 let lastStreamScore = null;
 let streamInFlight = false;
 let finalSubmitPending = false;
@@ -44,9 +48,65 @@ function setProgressError() {
     if (progressBar) progressBar.style.background = '#f44747';
 }
 
+function handleGradingFailure(message) {
+    unfreezeLabTimer();
+    resetPendingUpload();
+    streamInFlight = false;
+    finalSubmitPending = false;
+    const wasStreamPoll = state.liveStreaming && !activeGradingFinal;
+    activeGradingFinal = false;
+    setStatus(message);
+    setProgressError();
+    if (state.liveStreaming && streamFileHandle) {
+        setSubmitEnabled(true);
+        if (wasStreamPoll) {
+            lastUploadedHash = null;
+            const waitSec = parseStreamRateLimitSeconds(message);
+            if (waitSec !== null) {
+                scheduleStreamCooldown(waitSec * 1000);
+            } else {
+                beginStreamWatch();
+            }
+        } else {
+            updateStreamCountdownDisplay();
+        }
+    }
+}
+
 function setSubmitEnabled(enabled) {
     const btn = document.getElementById('btn-lab-submit');
     if (btn) btn.disabled = !enabled;
+}
+
+function getMaxUploadBytes() {
+    const mb = state.labMaxUploadMb;
+    if (!Number.isFinite(mb) || mb <= 0) return null;
+    return mb * 1024 * 1024;
+}
+
+function uploadLimitErrorMessage() {
+    const mb = state.labMaxUploadMb;
+    return mb > 0
+        ? `File exceeds the maximum allowed size for this lab (${mb} MB).`
+        : 'File exceeds the maximum allowed size for this lab.';
+}
+
+function fileExceedsUploadLimit(sizeBytes) {
+    const maxBytes = getMaxUploadBytes();
+    return maxBytes !== null && sizeBytes > maxBytes;
+}
+
+function showUploadLimitError() {
+    setStatus(uploadLimitErrorMessage());
+    setProgressError();
+}
+
+function rejectStreamFilePick() {
+    streamFileHandle = null;
+    updateStreamFileLabel('');
+    showUploadLimitError();
+    setSubmitEnabled(false);
+    clearPersistedStreamHandle(state.currentChallengeId).catch(() => {});
 }
 
 function supportsFileSystemAccess() {
@@ -67,6 +127,17 @@ function openStreamDb() {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
     });
+}
+
+async function clearPersistedStreamHandle(labId) {
+    if (!labId) return;
+    try {
+        const db = await openStreamDb();
+        const tx = db.transaction(STREAM_DB_STORE, 'readwrite');
+        tx.objectStore(STREAM_DB_STORE).delete(streamDbKey(labId));
+    } catch {
+        /* optional persistence */
+    }
 }
 
 async function persistStreamHandle(labId, handle) {
@@ -91,8 +162,12 @@ async function loadPersistedStreamHandle(labId) {
             req.onerror = () => reject(req.error);
         });
         if (handle) {
-            streamFileHandle = handle;
             const file = await handle.getFile();
+            if (fileExceedsUploadLimit(file.size)) {
+                rejectStreamFilePick();
+                return;
+            }
+            streamFileHandle = handle;
             lastFileHash = await hashArrayBuffer(await file.arrayBuffer());
             updateStreamFileLabel(file.name);
             setSubmitEnabled(true);
@@ -127,18 +202,64 @@ function updateStreamCountdownDisplay() {
         return;
     }
 
-    const remaining = Math.max(0, Math.ceil((nextStreamCheckAt - Date.now()) / 1000));
-    el.textContent = `Next server check in ${formatStreamCountdown(remaining)}`;
+    if (streamWatchActive) {
+        el.textContent = 'Waiting for you to save changes in Packet Tracer…';
+        return;
+    }
+
+    const remaining = Math.max(0, Math.ceil((nextStreamWindowAt - Date.now()) / 1000));
+    el.textContent = `Next grade window in ${formatStreamCountdown(remaining)}`;
 }
 
-function resetStreamCheckCountdown() {
-    nextStreamCheckAt = Date.now() + STREAM_INTERVAL_MS;
+function clearStreamCooldownTimer() {
+    if (streamCooldownTimerId) {
+        clearTimeout(streamCooldownTimerId);
+        streamCooldownTimerId = null;
+    }
+}
+
+function stopStreamHashPoll() {
+    if (streamHashPollId) {
+        clearInterval(streamHashPollId);
+        streamHashPollId = null;
+    }
+}
+
+function stopStreamWatch() {
+    streamWatchActive = false;
+    stopStreamHashPoll();
+}
+
+function scheduleStreamCooldown(delayMs = STREAM_INTERVAL_MS) {
+    stopStreamWatch();
+    clearStreamCooldownTimer();
+    nextStreamWindowAt = Date.now() + delayMs;
     updateStreamCountdownDisplay();
+    streamCooldownTimerId = setTimeout(() => {
+        streamCooldownTimerId = null;
+        beginStreamWatch();
+    }, delayMs);
+}
+
+function beginStreamWatch() {
+    if (!streamFileHandle || streamInFlight || !state.liveStreaming) return;
+
+    streamWatchActive = true;
+    updateStreamCountdownDisplay();
+    checkHashForStream().catch(() => {});
+    stopStreamHashPoll();
+    streamHashPollId = setInterval(() => {
+        checkHashForStream().catch(() => {});
+    }, STREAM_HASH_POLL_MS);
+}
+
+function parseStreamRateLimitSeconds(message) {
+    const match = String(message).match(/Please wait (\d+)s/);
+    return match ? parseInt(match[1], 10) : null;
 }
 
 function startStreamCheckCountdown() {
     stopStreamCheckCountdown();
-    resetStreamCheckCountdown();
     showStreamCountdown(true);
     streamCountdownIntervalId = setInterval(updateStreamCountdownDisplay, 1000);
 }
@@ -152,17 +273,17 @@ function stopStreamCheckCountdown() {
 }
 
 export function stopStreaming() {
-    if (streamTimerId) {
-        clearInterval(streamTimerId);
-        streamTimerId = null;
-    }
+    clearStreamCooldownTimer();
+    stopStreamWatch();
     stopStreamCheckCountdown();
     streamFileHandle = null;
     lastFileHash = null;
+    lastUploadedHash = null;
     lastStreamScore = null;
     streamInFlight = false;
     finalSubmitPending = false;
     activeGradingFinal = false;
+    nextStreamWindowAt = 0;
     updateStreamFileLabel('');
 }
 
@@ -215,6 +336,13 @@ function stageFileFromInput(fileInput) {
     const file = fileInput.files[0];
     if (!file || state.currentChallengeType !== 'lab') return;
 
+    if (fileExceedsUploadLimit(file.size)) {
+        showUploadLimitError();
+        setSubmitEnabled(false);
+        fileInput.value = '';
+        return;
+    }
+
     const reader = new FileReader();
     reader.onload = (evt) => {
         const fileData = evt.target.result;
@@ -245,11 +373,15 @@ async function pickStreamFile() {
         });
         streamFileHandle = handles[0];
         const file = await streamFileHandle.getFile();
+        if (fileExceedsUploadLimit(file.size)) {
+            rejectStreamFilePick();
+            return;
+        }
         lastFileHash = await hashArrayBuffer(await file.arrayBuffer());
         updateStreamFileLabel(file.name);
         setSubmitEnabled(true);
         await persistStreamHandle(state.currentChallengeId, streamFileHandle);
-        setStatus(`Watching ${file.name}. Every 2 minutes the file is checked; grades run only after you save changes in Packet Tracer.`);
+        setStatus(`Watching ${file.name}. After each grade window opens, your next save in Packet Tracer triggers a grade.`);
 
         startStreamPolling();
     } catch (err) {
@@ -261,27 +393,30 @@ async function pickStreamFile() {
 }
 
 function startStreamPolling() {
-    if (streamTimerId) clearInterval(streamTimerId);
+    clearStreamCooldownTimer();
+    stopStreamWatch();
     startStreamCheckCountdown();
-    streamTimerId = setInterval(() => {
-        readAndMaybeStream().catch(() => {});
-    }, STREAM_INTERVAL_MS);
+    scheduleStreamCooldown();
 }
 
-async function readAndMaybeStream() {
-    if (!streamFileHandle || streamInFlight || !state.liveStreaming) return;
-
-    resetStreamCheckCountdown();
+async function checkHashForStream() {
+    if (!streamFileHandle || streamInFlight || !state.liveStreaming || !streamWatchActive) return;
 
     const file = await streamFileHandle.getFile();
-    const buffer = await file.arrayBuffer();
-    const hash = await hashArrayBuffer(buffer);
-
-    if (hash === lastFileHash) {
-        setStatus(`No file changes since last check (${file.name}).`);
+    if (fileExceedsUploadLimit(file.size)) {
+        showUploadLimitError();
+        setSubmitEnabled(false);
         return;
     }
 
+    const buffer = await file.arrayBuffer();
+    const hash = await hashArrayBuffer(buffer);
+
+    if (hash === lastFileHash) return;
+    if (hash === lastUploadedHash) return;
+
+    lastUploadedHash = hash;
+    stopStreamWatch();
     queueUpload(buffer, file.size, { streaming: true, final: false });
 }
 
@@ -313,6 +448,10 @@ async function submitCurrentFile() {
         if (!confirmSubmit()) return;
 
         const file = await streamFileHandle.getFile();
+        if (fileExceedsUploadLimit(file.size)) {
+            showUploadLimitError();
+            return;
+        }
         const buffer = await file.arrayBuffer();
         finalSubmitPending = true;
         queueUpload(buffer, file.size, { streaming: true, final: true });
@@ -367,40 +506,51 @@ function handleResult(data) {
     clearBootstrapCache();
     streamInFlight = false;
     activeGradingFinal = false;
-    if (isStreamPoll) updateStreamCountdownDisplay();
 
     if (isStreamPoll) {
         if (streamFileHandle) {
             streamFileHandle.getFile()
                 .then((f) => f.arrayBuffer())
                 .then((buf) => hashArrayBuffer(buf))
-                .then((h) => { lastFileHash = h; })
+                .then((h) => {
+                    lastFileHash = h;
+                    lastUploadedHash = null;
+                })
                 .catch(() => {});
+        } else {
+            lastUploadedHash = null;
         }
 
         if (data.show_score && typeof data.total === 'number') {
             if (lastStreamScore !== null && data.total > lastStreamScore) {
-                const gained = data.total - lastStreamScore;
                 playGainSound({
                     title: 'Gained points',
-                    body: `Your score increased by ${gained} point${gained === 1 ? '' : 's'}.`,
+                    body: 'You gained points.',
+                });
+            } else if (lastStreamScore !== null && data.total < lastStreamScore) {
+                playLossSound({
+                    title: 'Lost points',
+                    body: 'You lost points.',
                 });
             }
             lastStreamScore = data.total;
         }
         setSubmitEnabled(Boolean(streamFileHandle));
-        return;
+        scheduleStreamCooldown();
+    } else {
+        if (isFinal && finalSubmitPending) {
+            stopStreaming();
+            finalSubmitPending = false;
+        }
+        setSubmitEnabled(false);
     }
 
-    if (isFinal && finalSubmitPending) {
-        stopStreaming();
-        finalSubmitPending = false;
+    if (!isStreamPoll) {
+        playFinishSound({
+            title: 'Lab graded',
+            body: 'Your lab submission has been graded.',
+        });
     }
-    setSubmitEnabled(false);
-    playFinishSound({
-        title: 'Lab graded',
-        body: 'Your lab submission has been graded.',
-    });
 }
 
 export function initUploadHandlers() {
@@ -432,28 +582,17 @@ export function initUploadHandlers() {
 
         state.socket.on('grade_slot_ready', (data) => {
             if (!pendingUpload) {
-                setStatus('Error: No file ready to upload.');
-                setProgressError();
-                streamInFlight = false;
-                finalSubmitPending = false;
+                handleGradingFailure('Error: No file ready to upload.');
                 return;
             }
 
             if (data?.labId !== pendingUpload.labId) {
-                setStatus('Error: Lab mismatch. Please submit again.');
-                setProgressError();
-                resetPendingUpload();
-                streamInFlight = false;
-                finalSubmitPending = false;
+                handleGradingFailure('Error: Lab mismatch. Please submit again.');
                 return;
             }
 
             if (!data?.slotToken) {
-                setStatus('Error: Invalid grading slot. Please submit again.');
-                setProgressError();
-                resetPendingUpload();
-                streamInFlight = false;
-                finalSubmitPending = false;
+                handleGradingFailure('Error: Invalid grading slot. Please submit again.');
                 return;
             }
 
@@ -473,19 +612,11 @@ export function initUploadHandlers() {
         });
 
         state.socket.on('grade_slot_expired', (data) => {
-            resetPendingUpload();
-            streamInFlight = false;
-            finalSubmitPending = false;
-            setStatus('Error: ' + (data?.message || 'Upload window expired. Please submit again.'));
-            setProgressError();
+            handleGradingFailure('Error: ' + (data?.message || 'Upload window expired. Please submit again.'));
         });
 
         state.socket.on('err', (msg) => {
-            resetPendingUpload();
-            streamInFlight = false;
-            finalSubmitPending = false;
-            setStatus('Error: ' + msg);
-            setProgressError();
+            handleGradingFailure('Error: ' + msg);
         });
 
         socketHandlersBound = true;
@@ -533,7 +664,7 @@ export function configureLabUploadMode(liveStreaming) {
             instructions.textContent = 'Use a Chromium-based browser (Chrome, Edge, or Opera). Pick your Packet Tracer file to stream grades while you work. Submit is your real, final submission when you are finished.';
         }
         if (saveNote) {
-            saveNote.textContent = 'Save your Packet Tracer file often. Live streaming checks every 2 minutes and grades only when the saved file changes. Submit ends the lab and counts as your official attempt — stream grades alone do not.';
+            saveNote.textContent = 'Save your Packet Tracer file often. A new grade window opens every 2 minutes after each successful stream grade; once open, your next save triggers grading. Submit ends the lab and counts as your official attempt — stream grades alone do not.';
         }
 
         if (!supportsFileSystemAccess()) {

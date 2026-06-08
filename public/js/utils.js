@@ -78,4 +78,8 @@ export function clearTimers() {
     if (state.labTimerInterval) clearInterval(state.labTimerInterval);
     state.quizTimerInterval = null;
     state.labTimerInterval = null;
+    state.labTimerEndTime = null;
+    state.labTimerFrozen = false;
+    state.labTimerFrozenAt = null;
+    state.labTimerOnExpire = null;
 }

@@ -35,6 +35,7 @@
                     <div class="admin-tabs">
                         <div class="admin-tab active" id="tab-admin-users">Manage Users</div>
                         <div class="admin-tab" id="tab-admin-lb">Manage Leaderboard</div>
+                        <div class="admin-tab" id="tab-admin-audit">Audit Log</div>
                     </div>
                 </div>
 
@@ -53,6 +54,40 @@
                                 </tr>
                             </thead>
                             <tbody id="admin-users-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="admin-panel-audit" class="admin-panel-content hidden">
+                    <div class="admin-toolbar">
+                        <label class="audit-filter-label">
+                            Filter:
+                            <select id="audit-event-filter" class="field-input audit-filter-select">
+                                <option value="">All events</option>
+                                <option value="account_created">Account created</option>
+                                <option value="password_changed">Password changed</option>
+                                <option value="admin_granted">Admin granted</option>
+                                <option value="admin_revoked">Admin revoked</option>
+                                <option value="owner_granted">Owner granted</option>
+                                <option value="user_deleted">User deleted</option>
+                                <option value="server_error">Server errors</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="admin-table" id="admin-audit-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Event</th>
+                                    <th>Actor</th>
+                                    <th>Target</th>
+                                    <th>Lab</th>
+                                    <th>Source</th>
+                                    <th>Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-audit-body"></tbody>
                         </table>
                     </div>
                 </div>

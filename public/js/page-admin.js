@@ -1,5 +1,5 @@
 import { initShell } from './shell.js';
-import { loadAdminPanel, adminPromptCreateUser } from './admin.js';
+import { loadAdminPanel, adminPromptCreateUser, loadAuditLog } from './admin.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
     const boot = await initShell('admin');
@@ -11,16 +11,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadAdminPanel();
 
     document.getElementById('btn-admin-new-user')?.addEventListener('click', adminPromptCreateUser);
+    function showAdminTab(panelId, tabId) {
+        ['admin-panel-users', 'admin-panel-lb', 'admin-panel-audit'].forEach(id => {
+            document.getElementById(id)?.classList.add('hidden');
+        });
+        ['tab-admin-users', 'tab-admin-lb', 'tab-admin-audit'].forEach(id => {
+            document.getElementById(id)?.classList.remove('active');
+        });
+        document.getElementById(panelId)?.classList.remove('hidden');
+        document.getElementById(tabId)?.classList.add('active');
+    }
+
     document.getElementById('tab-admin-users')?.addEventListener('click', () => {
-        document.getElementById('admin-panel-users')?.classList.remove('hidden');
-        document.getElementById('admin-panel-lb')?.classList.add('hidden');
-        document.getElementById('tab-admin-users')?.classList.add('active');
-        document.getElementById('tab-admin-lb')?.classList.remove('active');
+        showAdminTab('admin-panel-users', 'tab-admin-users');
     });
     document.getElementById('tab-admin-lb')?.addEventListener('click', () => {
-        document.getElementById('admin-panel-lb')?.classList.remove('hidden');
-        document.getElementById('admin-panel-users')?.classList.add('hidden');
-        document.getElementById('tab-admin-lb')?.classList.add('active');
-        document.getElementById('tab-admin-users')?.classList.remove('active');
+        showAdminTab('admin-panel-lb', 'tab-admin-lb');
     });
+    document.getElementById('tab-admin-audit')?.addEventListener('click', () => {
+        showAdminTab('admin-panel-audit', 'tab-admin-audit');
+        loadAuditLog();
+    });
+    document.getElementById('audit-event-filter')?.addEventListener('change', () => loadAuditLog());
 });

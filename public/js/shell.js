@@ -33,7 +33,10 @@ function applyBootstrap(data, activePage) {
     state.currentUser = data.user?.unique_id || null;
 
     const uidEl = document.getElementById('uid-display');
-    if (uidEl && data.user?.unique_id) uidEl.innerText = data.user.unique_id;
+    if (uidEl && data.user?.unique_id) {
+        const name = data.user.username ? `${data.user.username} · ` : '';
+        uidEl.innerText = `${name}${data.user.unique_id}`;
+    }
 
     state.availableChallenges = data.challenges || [];
     if (data.options) applyBranding(data.options);
@@ -62,6 +65,7 @@ async function fetchBootstrapFallback() {
     return {
         user: {
             id: meData.id,
+            username: meData.username,
             unique_id: meData.unique_id,
             is_admin: meData.is_admin,
             is_owner: meData.is_owner,

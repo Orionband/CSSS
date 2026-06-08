@@ -6,10 +6,11 @@ const fs = require('fs');
 const db = require('../database');
 const { sanitizeUsername, sanitizeEmail, MAX_FIELD_LEN } = require('../sanitizeUserFields');
 const { validatePasswordPolicy } = require('../passwordPolicy');
-const { parsePagination, MAX_LEADERBOARD, rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
+const { parsePagination, MAX_LEADERBOARD, rateLimitPreset, getConfigNumber, ensureArray, resolveUploadMb } = require('../limits');
 const { buildLeaderboard, buildEntryForUser, getBestSubmissionsMaps } = require('../leaderboardScores');
-const { elapsedSecondsSince } = require('../submissionDuration');
+const { elapsedSecondsSince, chartTimeMs } = require('../submissionDuration');
 const { getConfig, isWindowOpen } = require('../config');
+const { logAccountCreated } = require('../auditLog');
 const router = express.Router();
 const { customAlphabet } = require('nanoid');
 const rateLimit = require('express-rate-limit');
@@ -89,6 +90,14 @@ router.post('/register', registerLimiter, async (req, res) => {
         const uid = generateUniqueId();
         const stmt = db.prepare('INSERT INTO users (username, email, password, unique_id) VALUES (?, ?, ?, ?)');
         const info = stmt.run(userStr, emailStr, hashedPassword, uid);
+        logAccountCreated({
+            actorUserId: null,
+            targetUserId: info.lastInsertRowid,
+            username: userStr,
+            isAdmin: false,
+            isOwner: false,
+            source: 'registration',
+        });
         req.session.regenerate((err) => {
             if (err) return res.status(500).json({ error: "Registration failed. Please try again." });
             req.session.userId = info.lastInsertRowid;
@@ -157,9 +166,10 @@ router.post('/login', loginLimiter, async (req, res) => {
 
 router.get('/me', meLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    const user = db.prepare('SELECT is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT username, is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
     res.json({
         id: req.session.userId,
+        username: user?.username,
         unique_id: req.session.uniqueId,
         is_admin: user && user.is_admin === 1,
         is_owner: user && user.is_owner === 1,
@@ -236,12 +246,13 @@ router.get('/bootstrap', bootstrapLimiter, (req, res) => {
         return res.status(401).json({ error: 'Not logged in' });
     }
 
-    const user = db.prepare('SELECT is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT username, is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
     const cfg = getConfig();
 
     res.json({
         user: {
             id: req.session.userId,
+            username: user?.username,
             unique_id: req.session.uniqueId,
             is_admin: user && user.is_admin === 1,
             is_owner: user && user.is_owner === 1,
@@ -294,6 +305,7 @@ router.get('/lab/:id', labInfoLimiter, (req, res) => {
         max_submissions: getConfigNumber(lab.max_submissions, 0),
         attempts_taken: totalAttempts,
         time_limit_minutes: timeLimitMinutes,
+        max_upload_mb: resolveUploadMb(lab.max_upload_mb),
         has_pka_file: !!lab.pka_file,
         live_streaming: lab.live_streaming === true,
         session_active: sessionActive,
@@ -364,6 +376,7 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
             resumed: result.resumed,
             has_pka_file: !!lab.pka_file,
             live_streaming: lab.live_streaming === true,
+            max_upload_mb: resolveUploadMb(lab.max_upload_mb),
             time_remaining_seconds: result.timeRemaining
         });
     } catch (err) {
@@ -505,28 +518,33 @@ router.get('/leaderboard/user/:username', leaderboardLimiter, (req, res) => {
         }
 
         const rows = db.prepare(`
-            SELECT score, max_score, timestamp, duration_seconds
+            SELECT score, max_score, timestamp, duration_seconds, COALESCE(stream_poll, 0) AS stream_poll
             FROM submissions
             WHERE user_id = ? AND lab_id = ? AND status = 'completed'
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC, id ASC
         `).all(user.id, ch.id);
 
         const bestScore = scoreMap[user.id]?.[ch.id] ?? null;
         const bestDuration = durationMap[user.id]?.[ch.id] ?? null;
+        const officialCount = rows.filter(row => !row.stream_poll).length;
 
         return {
             id: ch.id,
             title: ch.title,
             type: ch.type,
+            live_streaming: ch.type === 'lab' && ch.live_streaming === true,
             hidden: false,
             withheld: false,
             best_score: bestScore,
             best_duration_seconds: bestDuration,
+            submission_count: officialCount,
             records: rows.map(row => ({
                 timestamp: row.timestamp,
+                chart_time: chartTimeMs(row),
                 score: row.score,
                 max_score: row.max_score,
                 duration_seconds: row.duration_seconds,
+                stream_poll: Boolean(row.stream_poll),
                 play_time: formatPlayTime(row.duration_seconds),
             })),
         };

@@ -4,6 +4,8 @@ security/
 protected/images/
 protected/pka/
 grader.db
+audit.log
+audit.log.1
 lab.conf
 quiz.conf
 combined.txt

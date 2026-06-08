@@ -135,7 +135,7 @@
     color: var(--text-dim);
     font-size: 0.75rem;
     font-family: monospace;
-    max-width: 10rem;
+    max-width: 16rem;
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -202,7 +202,7 @@
         padding-top: 6px;
     }
 
-    #uid-display { max-width: 60%; }
+    #uid-display { max-width: 50%; }
 
     .panel-header {
         flex-direction: column;

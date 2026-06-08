@@ -7,12 +7,10 @@ import { clearBootstrapCache } from './auth.js';
 import { createLabWarnScheduler, ensureNotificationPermission } from './sounds.js';
 
 import { configureLabUploadMode, stopStreaming } from './upload.js';
-
-
+import { freezeLabTimer, startLabTimer, unfreezeLabTimer } from './lab-timer.js';
 
 export { renderLabResults } from './lab-results.js';
-
-export { freezeLabTimer } from './lab-timer.js';
+export { freezeLabTimer, unfreezeLabTimer };
 
 
 
@@ -186,6 +184,7 @@ export async function startLabSession(id) {
 
 export function showLabActive(id, data) {
 
+    state.labMaxUploadMb = Number(data.max_upload_mb) || 0;
     configureLabUploadMode(data.live_streaming === true);
 
 
@@ -238,87 +237,30 @@ export function showLabActive(id, data) {
 
 
 
-    const timerDiv = document.getElementById('lab-timer');
-
-    if (state.labTimerInterval) clearInterval(state.labTimerInterval);
-
-    state.labTimerFrozen = false;
-
-
-
     if (data.time_remaining_seconds !== null && data.time_remaining_seconds !== undefined) {
-
-        const targetEndTime = Date.now() + (data.time_remaining_seconds * 1000);
-
         state.labWarnOnTick = createLabWarnScheduler(state.labTimeLimitSeconds);
-
-        const updateTimer = () => {
-
-            if (state.labTimerFrozen) return;
-
-            const remaining = Math.max(0, Math.floor((targetEndTime - Date.now()) / 1000));
-
-            const m = Math.floor(remaining / 60);
-
-            const s = remaining % 60;
-
-            timerDiv.innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
-
-            state.labWarnOnTick?.(remaining);
-
-
-
-            if (remaining <= 0) {
-
-                clearInterval(state.labTimerInterval);
-
-                state.labTimerInterval = null;
-
-                timerDiv.innerText = "TIME'S UP";
-
-                timerDiv.style.color = '#f44747';
-
-                alert("Time's up! You can no longer submit for this lab session.");
-
-                stopStreaming();
-
-                const uploadArea = document.getElementById('upload-area-box');
-
-                if (uploadArea) {
-
-                    uploadArea.style.pointerEvents = 'none';
-
-                    uploadArea.style.opacity = '0.4';
-
-                }
-
-                const streamArea = document.getElementById('stream-pick-area');
-
-                if (streamArea) {
-
-                    streamArea.style.pointerEvents = 'none';
-
-                    streamArea.style.opacity = '0.4';
-
-                }
-
-                document.getElementById('btn-lab-submit')?.setAttribute('disabled', 'disabled');
-
-            }
-
-        };
-
-        updateTimer();
-
-        state.labTimerInterval = setInterval(updateTimer, 1000);
-
-    } else if (timerDiv) {
-
-        timerDiv.innerText = '';
-
+    } else {
         state.labWarnOnTick = null;
-
     }
+
+    startLabTimer(data.time_remaining_seconds, () => {
+        alert("Time's up! You can no longer submit for this lab session.");
+        stopStreaming();
+
+        const uploadArea = document.getElementById('upload-area-box');
+        if (uploadArea) {
+            uploadArea.style.pointerEvents = 'none';
+            uploadArea.style.opacity = '0.4';
+        }
+
+        const streamArea = document.getElementById('stream-pick-area');
+        if (streamArea) {
+            streamArea.style.pointerEvents = 'none';
+            streamArea.style.opacity = '0.4';
+        }
+
+        document.getElementById('btn-lab-submit')?.setAttribute('disabled', 'disabled');
+    });
 
 }
 
