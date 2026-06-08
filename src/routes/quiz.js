@@ -8,6 +8,7 @@ const { getConfig, isWindowOpen } = require('../config');
  const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
 const rateLimit = require('express-rate-limit');
 const { rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
+const { logServerError } = require('../auditLog');
 const router = express.Router();
 
 const quizSubmitLimiter = rateLimit(rateLimitPreset({
@@ -122,6 +123,7 @@ setInterval(() => {
             }
         });
     } catch (e) {
+        logServerError({ detail: e.message, source: 'quiz_sweeper' });
         console.error("Error in quiz sweeper:", e.message);
     }
 }, 60 * 1000);
@@ -246,7 +248,7 @@ router.get('/:id', quizLimiter, (req, res) => {
 
             if (timeRemaining <= 0) {
                 const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
                   .run(JSON.stringify([{message: "Time expired", correct: false}]), durationSeconds, existingInProgress.id);
                 clearQuizMappings(req, quiz.id);
                 sessionActive = false;
@@ -295,7 +297,7 @@ router.post('/:id/start', quizStartLimiter, (req, res) => {
 
                 if (timeRemaining <= 0) {
                     const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
-                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
                       .run(JSON.stringify([{message: "Time expired", correct: false}]), durationSeconds, existingInProgress.id);
                     return { error: "Time limit expired for this attempt.", code: 403, clearMappings: true };
                 }
@@ -349,6 +351,7 @@ router.post('/:id/start', quizStartLimiter, (req, res) => {
             return res.status(result.code).json({ error: result.error });
         }
     } catch (e) {
+        logServerError({ userId: req.session.userId, labId: quiz.id, detail: e.message, source: 'quiz' });
         return res.status(500).json({ error: "An internal error occurred." });
     }
 
@@ -394,6 +397,7 @@ router.post('/:id/start', quizStartLimiter, (req, res) => {
     req.session.quizMappings[quiz.id] = quizMappings;
     req.session.save((saveErr) => {
         if (saveErr) {
+            logServerError({ userId: req.session.userId, labId: quiz.id, detail: saveErr.message, source: 'quiz' });
             console.error('Failed to save quiz mappings to session:', saveErr.message);
         }
         res.json({ questions: safeQuestions, time_remaining_seconds: timeRemaining });
@@ -412,6 +416,7 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
         return res.status(429).json({ error: "A submission is currently processing. Please wait." });
     }
 
+    let clearMappingsOnExit = false;
     try {
         if (!isWindowOpen(quiz)) {
             return res.status(403).json({ error: "Submissions are currently closed outside of the competition window." });
@@ -429,9 +434,9 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
             const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
             
             if (elapsedSeconds > (submitTimeLimitMinutes * 60) + 2) {
-                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ?")
+                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
                       .run(JSON.stringify([{message: "Submission rejected: Time limit expired.", correct: false}]), elapsedSeconds, existingInProgress.id);
-                 clearQuizMappings(req, quiz.id);
+                 clearMappingsOnExit = true;
                  return res.status(403).json({ error: "Time limit expired." });
             }
         }
@@ -532,21 +537,26 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
             "UPDATE submissions SET score = ?, max_score = ?, details = ?, status = 'completed', duration_seconds = ? WHERE id = ? AND status = 'in_progress'"
         ).run(score, maxScore, JSON.stringify(breakdown), durationSeconds, existingInProgress.id);
         if (updateResult.changes === 0) {
+            clearMappingsOnExit = true;
             return res.status(403).json({ error: 'Quiz session ended before your submission was recorded.' });
         }
 
         const showScore = quiz.show_score !== false;
         const showCorrections = quiz.show_corrections !== false;
 
+        clearMappingsOnExit = true;
         res.json({
             success: true,
             score: showScore ? score : null,
             max_score: showScore ? maxScore : null,
             breakdown: showCorrections ? breakdown : null
         });
+    } catch (e) {
+        logServerError({ userId: req.session.userId, labId: quiz.id, detail: e.message, source: 'quiz_submit' });
+        res.status(500).json({ error: "An internal error occurred." });
     } finally {
         db.releaseLock(lockKey);
-        clearQuizMappings(req, quiz.id);
+        if (clearMappingsOnExit) clearQuizMappings(req, quiz.id);
     }
 });
 

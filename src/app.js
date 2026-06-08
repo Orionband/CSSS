@@ -22,6 +22,7 @@ const { getConfig, isWindowOpen } = require('./config');
 const { resolveUploadMb, maxUploadMbFromLabs, getConfigNumber } = require('./limits');
 const { GraderWorkerPool } = require('./workerPool');
 const { GradeAdmissionQueue } = require('./gradeAdmissionQueue');
+const { logServerError } = require('./auditLog');
 const authRoutes = require('./routes/auth');
 const quizRoutes = require('./routes/quiz');
 const adminRoutes = require('./routes/admin');
@@ -359,16 +360,34 @@ function dispatchGradingTask(task) {
 
                    socket.emit('result', payload);
                } catch (e) {
+                   logServerError({
+                       userId: socketUser.id,
+                       labId: targetLab.id,
+                       detail: e && e.message ? e.message : String(e),
+                       source: 'grading',
+                   });
                    socket.emit('err', "An internal processing error occurred.");
                } finally {
                    finishTask();
                }
            } else if (msg.type === 'error') {
+               logServerError({
+                   userId: socketUser.id,
+                   labId: targetLab.id,
+                   detail: msg.auditDetail || msg.msg,
+                   source: 'grading',
+               });
                socket.emit('err', msg.msg);
                finishTask();
            }
        },
        (errMsg) => {
+           logServerError({
+               userId: socketUser.id,
+               labId: targetLab.id,
+               detail: `Worker pool failure: ${errMsg}`,
+               source: 'grading',
+           });
            socket.emit('err', errMsg);
            finishTask();
        }
@@ -832,6 +851,12 @@ io.on('connection', (socket) => {
 
                fs.writeFile(tempFilePath, fileBuffer, (writeErr) => {
                    if (writeErr) {
+                       logServerError({
+                           userId: socketUser.id,
+                           labId: targetLab.id,
+                           detail: writeErr.message || 'Failed to save upload to temp file',
+                           source: 'upload',
+                       });
                        db.releaseLock(lockKey);
                        notifyGradingSlotsAvailable();
                        return socket.emit('err', "An internal error occurred while saving the file.");
@@ -845,6 +870,12 @@ io.on('connection', (socket) => {
            }
 
        } catch (err) {
+           logServerError({
+               userId: socketUser?.id,
+               labId: targetLab?.id,
+               detail: err && err.message ? err.message : String(err),
+               source: 'upload',
+           });
            db.releaseLock(lockKey);
            cleanupTempFile(tempFilePath);
            notifyGradingSlotsAvailable();

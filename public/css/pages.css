@@ -539,6 +539,10 @@ a.btn-ghost {
 .admin-tab.active { background: var(--accent); color: #101010; }
 
 .admin-panel-content { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+.audit-filter-label { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--text-muted, #aaa); }
+.audit-filter-select { width: auto; min-width: 180px; padding: 6px 10px; }
+.audit-detail-cell { max-width: 280px; word-break: break-word; }
 .admin-toolbar { padding: 12px 20px; display: flex; justify-content: flex-end; border-bottom: 1px solid var(--input-bg); background: #222; }
 .table-wrapper { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
 .admin-table { width: 100%; min-width: 600px; text-align: left; border-collapse: collapse; font-size: 0.9rem; }

@@ -9,7 +9,7 @@ function getBestSubmissionsMaps() {
                     ORDER BY score DESC, COALESCE(duration_seconds, 2147483647) ASC
                 ) AS rn
             FROM submissions
-            WHERE status = 'completed'
+            WHERE status = 'completed' AND COALESCE(stream_poll, 0) = 0
         )
         SELECT user_id, lab_id, score AS max_score, duration_seconds
         FROM ranked
@@ -97,9 +97,11 @@ function buildEntryForUser(u, allChallenges, labs, quizzes, scoreMap, durationMa
         Object.keys(scores).forEach(k => { scores[k] = 'W'; });
     }
 
+    const adjustment = u.score_adjustment || 0;
     return {
         username: u.username,
         scores,
+        score_adjustment: u.withheld ? 'W' : adjustment,
         total_score: u.withheld ? 'W' : total,
         total_time_seconds: totalTime > 0 ? totalTime : null,
     };

@@ -20,7 +20,14 @@ function formatDuration(seconds) {
 }
 
 function parseDbTimestamp(dbTimestamp) {
-    return new Date(String(dbTimestamp).replace(' ', 'T') + 'Z').getTime();
+    if (dbTimestamp == null) return NaN;
+    const raw = String(dbTimestamp).trim();
+    if (!raw) return NaN;
+    if (raw.includes('T')) {
+        const iso = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
+        return new Date(iso).getTime();
+    }
+    return new Date(raw.replace(' ', 'T') + 'Z').getTime();
 }
 
 function formatUtcDateTime(ms) {
@@ -29,10 +36,18 @@ function formatUtcDateTime(ms) {
     return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
 }
 
-function formatUtcAxisTick(ms) {
+function formatUtcAxisTick(ms, rangeMs = 0) {
     const d = new Date(ms);
     const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+    const dateTime = `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+    if (rangeMs > 0 && rangeMs < 48 * 60 * 60 * 1000) return dateTime;
+    const year = String(d.getUTCFullYear()).slice(-2);
+    return `${year}/${dateTime}`;
+}
+
+function recordChartTime(record) {
+    if (record.chart_time != null && Number.isFinite(record.chart_time)) return record.chart_time;
+    return parseDbTimestamp(record.timestamp);
 }
 
 function readCssVar(name, fallback) {
@@ -50,18 +65,28 @@ function buildChartDatasets(challenges) {
         const color = CHART_COLORS[colorIndex % CHART_COLORS.length];
         colorIndex += 1;
 
-        datasets.push({
-            label: ch.title,
-            data: ch.records.map(r => ({
-                x: parseDbTimestamp(r.timestamp),
+        const points = ch.records
+            .map(r => ({
+                x: recordChartTime(r),
                 y: r.score,
                 duration_seconds: r.duration_seconds,
-            })),
+                stream_poll: Boolean(r.stream_poll),
+            }))
+            .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+            .sort((a, b) => a.x - b.x || a.y - b.y);
+
+        if (!points.length) continue;
+
+        datasets.push({
+            label: ch.title,
+            data: points,
             borderColor: color,
             backgroundColor: color,
             fill: false,
-            tension: 0.15,
-            pointRadius: 4,
+            tension: 0,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            spanGaps: true,
         });
     }
 
@@ -105,7 +130,7 @@ function renderChallengeTable(challenges) {
         } else {
             bestScore = ch.best_score != null ? String(ch.best_score) : '—';
             bestTime = formatDuration(ch.best_duration_seconds);
-            submissions = String(ch.records.length);
+            submissions = String(ch.submission_count ?? ch.records.filter(r => !r.stream_poll).length);
         }
 
         tr.innerHTML = `
@@ -140,6 +165,13 @@ function renderChart(challenges) {
         window.userDetailChart.destroy();
     }
 
+    const allX = datasets.flatMap(ds => ds.data.map(p => p.x));
+    const minX = Math.min(...allX);
+    const maxX = Math.max(...allX);
+    const rangeX = maxX - minX;
+    const rangePad = Math.max(rangeX * 0.04, 5 * 60 * 1000);
+    const totalPoints = datasets.reduce((n, ds) => n + ds.data.length, 0);
+
     window.userDetailChart = new Chart(canvas, {
         type: 'line',
         data: { datasets },
@@ -150,6 +182,8 @@ function renderChart(challenges) {
             scales: {
                 x: {
                     type: 'linear',
+                    min: minX - rangePad,
+                    max: maxX + rangePad,
                     title: {
                         display: true,
                         text: 'Time (UTC)',
@@ -158,8 +192,11 @@ function renderChart(challenges) {
                     ticks: {
                         color: textColor,
                         maxRotation: 45,
+                        autoSkip: true,
+                        maxTicksLimit: 12,
+                        source: totalPoints <= 8 ? 'data' : 'auto',
                         callback(value) {
-                            return formatUtcAxisTick(value);
+                            return formatUtcAxisTick(value, rangeX);
                         },
                     },
                     grid: { color: gridColor },
@@ -181,11 +218,15 @@ function renderChart(challenges) {
                 },
                 tooltip: {
                     callbacks: {
+                        title(items) {
+                            const x = items[0]?.parsed?.x ?? items[0]?.raw?.x;
+                            return Number.isFinite(x) ? formatUtcDateTime(x) : '';
+                        },
                         label(context) {
-                            const timeLabel = formatUtcDateTime(context.parsed.x);
                             const dur = context.raw?.duration_seconds;
                             const durLabel = dur != null ? `, ${formatDuration(dur)} play time` : '';
-                            return `${context.dataset.label}: ${context.parsed.y} pts @ ${timeLabel}${durLabel}`;
+                            const kind = context.raw?.stream_poll ? ' (stream)' : '';
+                            return `${context.dataset.label}: ${context.parsed.y} pts${durLabel}${kind}`;
                         },
                     },
                 },

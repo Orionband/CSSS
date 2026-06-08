@@ -1,6 +1,7 @@
 const FINISH_SRC = '/sound/finish.wav';
 const WARN_SRC = '/sound/warn.wav';
 const GAIN_SRC = '/sound/gain.wav';
+const ALARM_SRC = '/sound/alarm.wav';
 
 function playSound(src) {
     try {
@@ -38,6 +39,11 @@ export function playFinishSound({ title = 'Complete', body = 'Your work has been
 
 export function playGainSound({ title = 'Gained points', body = 'Your score increased.' } = {}) {
     playSound(GAIN_SRC);
+    sendNotification(title, body);
+}
+
+export function playLossSound({ title = 'Lost points', body = 'You lost points.' } = {}) {
+    playSound(ALARM_SRC);
     sendNotification(title, body);
 }
 

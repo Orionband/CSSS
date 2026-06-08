@@ -1,4 +1,3 @@
-const Database = require('better-sqlite3');
 const readline = require('readline');
 const path = require('path');
 const fs = require('fs');
@@ -8,6 +7,7 @@ const crypto = require('crypto');
 const { customAlphabet } = require('nanoid');
 const { sanitizeUsername, sanitizeEmail } = require('./src/sanitizeUserFields');
 const { validatePasswordPolicy } = require('./src/passwordPolicy');
+const { logAccountCreated, logPasswordChanged } = require('./src/auditLog');
 
 function generateUniqueId() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -23,6 +23,9 @@ if (!fs.existsSync(dbPath)) {
   process.exit(1);
 }
 
+const db = require('./src/database');
+console.log('Opened grader.db');
+
 // Backups have been disabled per instructions
 function backupDb() {
   // No-op: Database backups are disabled.
@@ -36,9 +39,6 @@ function invalidateUserSessions(userId) {
     console.warn('Warning: Could not invalidate sessions:', e.message);
   }
 }
-
-const db = new Database(dbPath, { readonly: false });
-console.log('Opened grader.db');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = q => new Promise(resolve =>
@@ -229,10 +229,30 @@ function genRandomPassword(len = 12) {
 }
 
 function writeGeneratedPasswordFile(password) {
-  const pwFile = path.join(os.tmpdir(), `.csss-pw-${process.pid}.txt`);
-  fs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
-  console.log(`Generated password written to: ${pwFile}`);
-  console.log('Read it once, then delete the file.');
+  let attempts = 0;
+  while (attempts < 5) {
+    const randomSuffix = crypto.randomBytes(8).toString('hex');
+    const pwFile = path.join(os.tmpdir(), `.csss-pw-${process.pid}-${randomSuffix}.txt`);
+    try {
+      const fd = fs.openSync(pwFile, 'wx', 0o600);
+      try {
+        fs.writeSync(fd, `${password}\n`);
+      } finally {
+        fs.closeSync(fd);
+      }
+      console.log(`Generated password written to: ${pwFile}`);
+      console.log('Read it once, then delete the file.');
+      return;
+    } catch (e) {
+      if (e.code === 'EEXIST') {
+        attempts++;
+        continue;
+      }
+      console.warn('Warning: Could not write generated password file:', e.message);
+      return;
+    }
+  }
+  console.warn('Warning: Could not write generated password file after multiple attempts.');
 }
 
 function applyCliPassword(pw, label) {
@@ -266,6 +286,14 @@ async function resetPassword() {
   const hash = bcrypt.hashSync(pw, rounds);
   backupDb();
   const info = db.prepare('UPDATE users SET password = ?, password_changed_at = ? WHERE id = ?').run(hash, Date.now(), user.id);
+  if (info.changes > 0) {
+    logPasswordChanged({
+      actorUserId: null,
+      targetUserId: user.id,
+      targetUsername: user.username,
+      source: 'cli',
+    });
+  }
   console.log(`Password updated. Rows affected: ${info.changes}`);
   invalidateUserSessions(user.id);
 }
@@ -358,6 +386,14 @@ async function createUser() {
     backupDb();
     try {
         const info = db.prepare('INSERT INTO users (username, email, password, unique_id) VALUES (?, ?, ?, ?)').run(username, email, hash, uid);
+        logAccountCreated({
+            actorUserId: null,
+            targetUserId: info.lastInsertRowid,
+            username,
+            isAdmin: false,
+            isOwner: false,
+            source: 'cli',
+        });
         console.log(`User created successfully. ID: ${info.lastInsertRowid}, Unique_ID: ${uid}`);
     } catch (err) {
         console.error('Error creating user:', err.message);
