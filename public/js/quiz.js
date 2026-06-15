@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { escapeHtml, securePost } from './utils.js';
+import { escapeHtml, securePost, showAlert, apiFetch, NETWORK_ERROR_MESSAGE, isNetworkError, showNetworkError } from './utils.js';
 import { clearBootstrapCache } from './auth.js';
 import { playFinishSound, ensureNotificationPermission } from './sounds.js';
 
@@ -38,56 +38,67 @@ export async function loadQuiz(id) {
     const errorEl = document.getElementById('quiz-info-error');
     errorEl?.classList.add('hidden');
 
-    const res = await fetch(`/api/quiz/${id}`);
-    const data = await res.json();
+    try {
+        const res = await apiFetch(`/api/quiz/${id}`);
+        const data = await res.json();
 
-    setQuizLoading(false);
-    document.getElementById('quiz-title').innerText = data.title || 'Quiz';
-    document.getElementById('quiz-active-title').innerText = data.title || 'Quiz';
+        document.getElementById('quiz-title').innerText = data.title || 'Quiz';
+        document.getElementById('quiz-active-title').innerText = data.title || 'Quiz';
 
-    if (data.error) {
+        if (data.error) {
+            showQuizIntro();
+            if (errorEl) {
+                errorEl.textContent = data.error;
+                errorEl.classList.remove('hidden');
+            }
+            document.getElementById('btn-start-quiz')?.classList.add('hidden');
+            return;
+        }
+
+        state.quizMetadataCache = data;
+        setQuizStats(data);
+        document.getElementById('quiz-timer').innerText = '';
+        document.getElementById('btn-start-quiz')?.classList.remove('hidden');
+        document.getElementById('btn-start-quiz').onclick = startQuizSession;
+
+        if (data.session_active) {
+            await startQuizSession();
+            return;
+        }
+
+        showQuizIntro();
+    } catch (err) {
         showQuizIntro();
         if (errorEl) {
-            errorEl.textContent = data.error;
+            errorEl.textContent = isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Failed to load quiz.';
             errorEl.classList.remove('hidden');
         }
         document.getElementById('btn-start-quiz')?.classList.add('hidden');
-        return;
+    } finally {
+        setQuizLoading(false);
     }
-
-    state.quizMetadataCache = data;
-    setQuizStats(data);
-    document.getElementById('quiz-timer').innerText = '';
-    document.getElementById('btn-start-quiz')?.classList.remove('hidden');
-    document.getElementById('btn-start-quiz').onclick = startQuizSession;
-
-    if (data.session_active) {
-        await startQuizSession();
-        return;
-    }
-
-    showQuizIntro();
 }
 
 export async function startQuizSession() {
     if (!state.currentChallengeId) return;
 
-    const res = await securePost(`/api/quiz/${state.currentChallengeId}/start`, {});
-    const data = await res.json();
+    try {
+        const res = await securePost(`/api/quiz/${state.currentChallengeId}/start`, {});
+        const data = await res.json();
 
-    if (data.error) {
-        alert(data.error);
-        loadQuiz(state.currentChallengeId);
-        return;
-    }
+        if (data.error) {
+            await showAlert(data.error, { title: 'Error' });
+            loadQuiz(state.currentChallengeId);
+            return;
+        }
 
-    clearBootstrapCache();
-    showQuizActive();
-    const area = document.getElementById('quiz-questions-area');
-    area.innerHTML = '';
-    document.getElementById('btn-submit-quiz').style.display = 'block';
+        clearBootstrapCache();
+        showQuizActive();
+        const area = document.getElementById('quiz-questions-area');
+        area.innerHTML = '';
+        document.getElementById('btn-submit-quiz').style.display = 'block';
 
-    data.questions.forEach((q, idx) => {
+        data.questions.forEach((q, idx) => {
         const card = document.createElement('div');
         card.className = 'quiz-question-card';
         card.dataset.type = q.type;
@@ -148,12 +159,16 @@ export async function startQuizSession() {
             if (remaining <= 0) {
                 clearInterval(state.quizTimerInterval);
                 state.quizTimerInterval = null;
-                alert("Time's up! Submitting...");
+                if (!document.getElementById('quiz-questions-area')) return;
                 submitQuiz();
+                void showAlert("Time's up! Your answers are being submitted.", { title: 'Time Expired' });
             }
         };
         updateTimer();
         state.quizTimerInterval = setInterval(updateTimer, 1000);
+    }
+    } catch (err) {
+        if (!(await showNetworkError(err))) throw err;
     }
 }
 
@@ -217,7 +232,14 @@ function buildMatchingQuestion(optsDiv, q, idx) {
     optsDiv.appendChild(matchContainer);
 }
 
+let quizSubmitInFlight = false;
+
 export async function submitQuiz() {
+    if (quizSubmitInFlight) return;
+
+    const area = document.getElementById('quiz-questions-area');
+    if (!area) return;
+
     ensureNotificationPermission();
 
     if (state.quizTimerInterval) {
@@ -225,40 +247,49 @@ export async function submitQuiz() {
         state.quizTimerInterval = null;
     }
 
-    const answers = {};
-    const area = document.getElementById('quiz-questions-area');
-    const cards = area.getElementsByClassName('quiz-question-card');
+    quizSubmitInFlight = true;
 
-    for (let i = 0; i < cards.length; i++) {
-        const type = cards[i].dataset.type;
+    let result;
+    try {
+        const answers = {};
+        const cards = area.getElementsByClassName('quiz-question-card');
 
-        if (type === 'text') {
-            const textInput = cards[i].querySelector('input[type="text"]');
-            if (textInput) answers[i] = textInput.value;
-        } else if (type === 'matching') {
-            const matches = {};
-            cards[i].querySelectorAll('.match-item').forEach(row => {
-                const zone = row.querySelector('.drop-zone');
-                const leftId = zone.dataset.leftId;
-                const child = zone.querySelector('.draggable-item');
-                if (child) matches[leftId] = child.dataset.val;
-            });
-            answers[i] = matches;
-        } else {
-            const inputs = cards[i].querySelectorAll('input:checked');
-            if (inputs.length === 1 && type === 'radio') {
-                answers[i] = inputs[0].value;
-            } else if (inputs.length > 0) {
-                answers[i] = Array.from(inputs).map(inp => inp.value);
+        for (let i = 0; i < cards.length; i++) {
+            const type = cards[i].dataset.type;
+
+            if (type === 'text') {
+                const textInput = cards[i].querySelector('input[type="text"]');
+                if (textInput) answers[i] = textInput.value;
+            } else if (type === 'matching') {
+                const matches = {};
+                cards[i].querySelectorAll('.match-item').forEach(row => {
+                    const zone = row.querySelector('.drop-zone');
+                    const leftId = zone.dataset.leftId;
+                    const child = zone.querySelector('.draggable-item');
+                    if (child) matches[leftId] = child.dataset.val;
+                });
+                answers[i] = matches;
+            } else {
+                const inputs = cards[i].querySelectorAll('input:checked');
+                if (inputs.length === 1 && type === 'radio') {
+                    answers[i] = inputs[0].value;
+                } else if (inputs.length > 0) {
+                    answers[i] = Array.from(inputs).map(inp => inp.value);
+                }
             }
         }
+
+        const res = await securePost(`/api/quiz/${state.currentChallengeId}/submit`, { answers });
+        result = await res.json();
+    } catch (err) {
+        if (await showNetworkError(err, { title: 'Submit Failed' })) return;
+        throw err;
+    } finally {
+        quizSubmitInFlight = false;
     }
 
-    const res = await securePost(`/api/quiz/${state.currentChallengeId}/submit`, { answers });
-    const result = await res.json();
-
     if (result.error) {
-        alert(result.error);
+        await showAlert(result.error, { title: 'Error' });
         return;
     }
 

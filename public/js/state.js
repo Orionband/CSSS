@@ -24,6 +24,7 @@ export const state = {
     labTimerFrozen: false,
     labTimerFrozenAt: null,
     labTimerOnExpire: null,
+    labTimerExpired: false,
     labTimeLimitSeconds: 0,
     labMaxUploadMb: 0,
     liveStreaming: false,

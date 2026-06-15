@@ -1,6 +1,7 @@
 import { state } from './state.js';
-import { escapeHtml } from './utils.js';
+import { escapeHtml, showAlert, apiFetch, NETWORK_ERROR_MESSAGE, isNetworkError } from './utils.js';
 import { renderLabResults } from './lab.js';
+import { consumePrefetch } from './prefetch.js';
 
 const HISTORY_LIMIT = 50;
 let historyOffset = 0;
@@ -58,30 +59,44 @@ function updateHistoryLoadMore(panel, hasMore) {
 export async function loadHistory(append = false) {
     if (!append) historyOffset = 0;
 
-    const res = await fetch(`/api/history?limit=${HISTORY_LIMIT}&offset=${historyOffset}`);
-    const data = await res.json();
-
-    if (data.error) {
-        alert(data.error);
-        return;
-    }
-
     const panel = document.getElementById('history-list-panel');
     const list = document.getElementById('history-list');
 
-    if (!append && (!data.history || data.history.length === 0)) {
-        list.innerHTML = "<div class='challenges-empty'>No submissions yet.</div>";
-        updateHistoryLoadMore(panel, false);
-        return;
-    }
+    try {
+        let data = null;
+        if (!append && historyOffset === 0) {
+            data = consumePrefetch('history');
+        }
+        if (!data) {
+            const res = await apiFetch(`/api/history?limit=${HISTORY_LIMIT}&offset=${historyOffset}`);
+            if (res.status === 401) return;
+            data = await res.json();
+        }
+        if (data.error) {
+            await showAlert(data.error, { title: 'Error' });
+            return;
+        }
 
-    if (!append) list.innerHTML = '';
-    (data.history || []).forEach(sub => renderHistoryRow(sub, list));
+        if (!append && (!data.history || data.history.length === 0)) {
+            list.innerHTML = "<div class='challenges-empty'>No submissions yet.</div>";
+            updateHistoryLoadMore(panel, false);
+            return;
+        }
 
-    if (data.hasMore) {
-        historyOffset = data.offset + data.history.length;
+        if (!append) list.innerHTML = '';
+        (data.history || []).forEach(sub => renderHistoryRow(sub, list));
+
+        if (data.hasMore) {
+            historyOffset = data.offset + data.history.length;
+        }
+        updateHistoryLoadMore(panel, data.hasMore);
+    } catch (err) {
+        if (!append) {
+            const msg = isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Failed to load history.';
+            list.innerHTML = `<div class='challenges-empty error-center'>${escapeHtml(msg)}</div>`;
+            updateHistoryLoadMore(panel, false);
+        }
     }
-    updateHistoryLoadMore(panel, data.hasMore);
 }
 
 function showHistoryDetail(sub) {

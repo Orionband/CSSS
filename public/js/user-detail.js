@@ -1,4 +1,4 @@
-import { escapeHtml } from './utils.js';
+import { escapeHtml, parseDbTimestamp, apiFetch, NETWORK_ERROR_MESSAGE, isNetworkError } from './utils.js';
 
 const CHART_COLORS = [
     '#f05d5e',
@@ -12,22 +12,11 @@ const CHART_COLORS = [
 ];
 
 function formatDuration(seconds) {
-    if (seconds == null) return '—';
+    if (seconds == null) return '-';
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     if (m > 0) return `${m}m ${s}s`;
     return `${s}s`;
-}
-
-function parseDbTimestamp(dbTimestamp) {
-    if (dbTimestamp == null) return NaN;
-    const raw = String(dbTimestamp).trim();
-    if (!raw) return NaN;
-    if (raw.includes('T')) {
-        const iso = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
-        return new Date(iso).getTime();
-    }
-    return new Date(raw.replace(' ', 'T') + 'Z').getTime();
 }
 
 function formatUtcDateTime(ms) {
@@ -95,7 +84,7 @@ function buildChartDatasets(challenges) {
 
 function renderSummary(data) {
     const user = data.user;
-    document.getElementById('detail-title').textContent = `${user.username} — Detail`;
+    document.getElementById('detail-title').textContent = `${user.username} - Detail`;
     document.getElementById('detail-username').textContent = user.username;
 
     const scoreEl = document.getElementById('detail-total-score');
@@ -115,9 +104,9 @@ function renderChallengeTable(challenges) {
 
     for (const ch of challenges) {
         const tr = document.createElement('tr');
-        let bestScore = '—';
-        let bestTime = '—';
-        let submissions = '—';
+        let bestScore = '-';
+        let bestTime = '-';
+        let submissions = '-';
 
         if (ch.withheld) {
             bestScore = 'W';
@@ -128,7 +117,7 @@ function renderChallengeTable(challenges) {
             bestTime = '?';
             submissions = '?';
         } else {
-            bestScore = ch.best_score != null ? String(ch.best_score) : '—';
+            bestScore = ch.best_score != null ? String(ch.best_score) : '-';
             bestTime = formatDuration(ch.best_duration_seconds);
             submissions = String(ch.submission_count ?? ch.records.filter(r => !r.stream_poll).length);
         }
@@ -248,21 +237,29 @@ export async function loadUserDetail(username) {
     errorEl?.classList.add('hidden');
     content?.classList.add('hidden');
 
-    const res = await fetch(`/api/leaderboard/user/${encodeURIComponent(username)}`);
-    const data = await res.json();
+    try {
+        const res = await apiFetch(`/api/leaderboard/user/${encodeURIComponent(username)}`);
+        if (res.status === 401) return;
+        const data = await res.json();
 
-    loading?.classList.add('hidden');
+        if (!res.ok || data.error) {
+            if (errorEl) {
+                errorEl.textContent = data.error || 'Failed to load player detail.';
+                errorEl.classList.remove('hidden');
+            }
+            return;
+        }
 
-    if (!res.ok || data.error) {
+        renderSummary(data);
+        renderChallengeTable(data.challenges);
+        renderChart(data.challenges);
+        content?.classList.remove('hidden');
+    } catch (err) {
         if (errorEl) {
-            errorEl.textContent = data.error || 'Failed to load player detail.';
+            errorEl.textContent = isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Failed to load player detail.';
             errorEl.classList.remove('hidden');
         }
-        return;
+    } finally {
+        loading?.classList.add('hidden');
     }
-
-    renderSummary(data);
-    renderChallengeTable(data.challenges);
-    renderChart(data.challenges);
-    content?.classList.remove('hidden');
 }

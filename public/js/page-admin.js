@@ -1,5 +1,5 @@
 import { initShell } from './shell.js';
-import { loadAdminPanel, adminPromptCreateUser, loadAuditLog } from './admin.js';
+import { loadAdminPanel, adminPromptCreateUser, loadAuditLog, loadAnalyticsLabOptions, loadLabAnalytics, bindAdminUserSearch } from './admin.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
     const boot = await initShell('admin');
@@ -9,13 +9,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
     await loadAdminPanel();
+    bindAdminUserSearch();
 
     document.getElementById('btn-admin-new-user')?.addEventListener('click', adminPromptCreateUser);
     function showAdminTab(panelId, tabId) {
-        ['admin-panel-users', 'admin-panel-lb', 'admin-panel-audit'].forEach(id => {
+        ['admin-panel-users', 'admin-panel-lb', 'admin-panel-analytics', 'admin-panel-audit'].forEach(id => {
             document.getElementById(id)?.classList.add('hidden');
         });
-        ['tab-admin-users', 'tab-admin-lb', 'tab-admin-audit'].forEach(id => {
+        ['tab-admin-users', 'tab-admin-lb', 'tab-admin-analytics', 'tab-admin-audit'].forEach(id => {
             document.getElementById(id)?.classList.remove('active');
         });
         document.getElementById(panelId)?.classList.remove('hidden');
@@ -28,6 +29,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('tab-admin-lb')?.addEventListener('click', () => {
         showAdminTab('admin-panel-lb', 'tab-admin-lb');
     });
+    document.getElementById('tab-admin-analytics')?.addEventListener('click', async () => {
+        showAdminTab('admin-panel-analytics', 'tab-admin-analytics');
+        await loadAnalyticsLabOptions();
+        await loadLabAnalytics();
+    });
+    document.getElementById('analytics-lab-select')?.addEventListener('change', () => loadLabAnalytics());
     document.getElementById('tab-admin-audit')?.addEventListener('click', () => {
         showAdminTab('admin-panel-audit', 'tab-admin-audit');
         loadAuditLog();

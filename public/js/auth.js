@@ -1,5 +1,6 @@
 import { state } from './state.js';
-import { securePost, fetchCsrfToken, applyBranding } from './utils.js';
+import { securePost, fetchCsrfToken, applyBranding, NETWORK_ERROR_MESSAGE, isNetworkError, showAlert } from './utils.js';
+import { clearPrefetchCaches } from './prefetch.js';
 
 export function toggleAuth(mode) {
     document.getElementById('login-form').classList.toggle('hidden', mode !== 'login');
@@ -10,36 +11,55 @@ export function toggleAuth(mode) {
 export async function login() {
     const user = document.getElementById('l-user').value;
     const pass = document.getElementById('l-pass').value;
-    const res = await securePost('/api/login', { username: user, password: pass });
-    const data = await res.json();
-    if (data.success) {
-        if (data.csrfToken) state.csrfToken = data.csrfToken;
-        clearBootstrapCache();
-        location.href = '/challenges';
+    const errorEl = document.getElementById('auth-error');
+    try {
+        const res = await securePost('/api/login', { username: user, password: pass });
+        const data = await res.json();
+        if (data.success) {
+            if (data.csrfToken) state.csrfToken = data.csrfToken;
+            clearBootstrapCache();
+            location.href = '/challenges';
+        }
+        else errorEl.innerText = data.error;
+    } catch (err) {
+        if (isNetworkError(err)) errorEl.innerText = NETWORK_ERROR_MESSAGE;
+        else throw err;
     }
-    else document.getElementById('auth-error').innerText = data.error;
 }
 
 export async function register() {
     const user = document.getElementById('r-user').value;
     const email = document.getElementById('r-email').value;
     const pass = document.getElementById('r-pass').value;
-    const res = await securePost('/api/register', { username: user, email, password: pass });
-    const data = await res.json();
-    if (data.success) {
-        if (data.csrfToken) state.csrfToken = data.csrfToken;
-        clearBootstrapCache();
-        location.href = '/challenges';
+    const errorEl = document.getElementById('auth-error');
+    try {
+        const res = await securePost('/api/register', { username: user, email, password: pass });
+        const data = await res.json();
+        if (data.success) {
+            if (data.csrfToken) state.csrfToken = data.csrfToken;
+            clearBootstrapCache();
+            location.href = '/challenges';
+        }
+        else errorEl.innerText = data.error;
+    } catch (err) {
+        if (isNetworkError(err)) errorEl.innerText = NETWORK_ERROR_MESSAGE;
+        else throw err;
     }
-    else document.getElementById('auth-error').innerText = data.error;
 }
 
 export function clearBootstrapCache() {
     sessionStorage.removeItem('csss_bootstrap');
+    clearPrefetchCaches();
 }
 
 export async function logout() {
-    await securePost('/api/logout');
+    try {
+        await securePost('/api/logout');
+    } catch (err) {
+        if (isNetworkError(err)) {
+            await showAlert(NETWORK_ERROR_MESSAGE, { title: 'Logout' });
+        }
+    }
     state.csrfToken = null;
     clearBootstrapCache();
     location.href = '/';

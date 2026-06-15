@@ -1,4 +1,5 @@
 import { state } from './state.js';
+import { prefetchRoute } from './prefetch.js';
 
 const NAV_ITEMS = [
     { page: 'challenges', href: '/challenges', label: 'Challenges', visible: () => state.availableChallenges.length > 0 },
@@ -22,6 +23,7 @@ export function renderNav(options, activePage) {
         if (admin) link.classList.add('nav-admin-link');
         if (page === activePage) link.classList.add('activeNav');
         link.textContent = label;
+        link.addEventListener('mouseenter', () => prefetchRoute(href), { once: true });
         nav.appendChild(link);
     });
 }

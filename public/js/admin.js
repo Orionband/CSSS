@@ -1,4 +1,4 @@
-import { escapeHtml, securePost, showModal, closeModal } from './utils.js';
+import { escapeHtml, securePost, showModal, closeModal, showAlert, showConfirm, apiFetch, NETWORK_ERROR_MESSAGE, isNetworkError, showNetworkError } from './utils.js';
 
 const ADMIN_USERS_LIMIT = 100;
 const ADMIN_SUBS_LIMIT = 100;
@@ -64,9 +64,29 @@ function adminRoleButtonHtml(u) {
     return `<button class="btn-small btn-secondary btn-admin-role" data-id="${escapeHtml(String(u.id))}" data-name="${escapeHtml(u.username)}" data-isadmin="0">Grant Admin</button>`;
 }
 
+function applyAdminUserSearch(query) {
+    const q = query.trim().toLowerCase();
+    document.querySelectorAll('#admin-users-body tr[data-username], #admin-lb-body tr[data-username]').forEach((row) => {
+        row.hidden = Boolean(q) && !row.dataset.username.includes(q);
+    });
+}
+
+export function bindAdminUserSearch() {
+    document.querySelectorAll('.admin-user-search').forEach((input) => {
+        input.addEventListener('input', () => {
+            const { value } = input;
+            document.querySelectorAll('.admin-user-search').forEach((el) => {
+                if (el !== input) el.value = value;
+            });
+            applyAdminUserSearch(value);
+        });
+    });
+}
+
 function renderAdminUserRows(users, usersBody, lbBody) {
     users.forEach(u => {
         const row = document.createElement('tr');
+        row.dataset.username = u.username.toLowerCase();
         const canDelete = u.id !== window.currentUserId && (!u.is_admin || window.isOwner);
         const actionsHtml = `
             <div class="action-btns">
@@ -88,6 +108,7 @@ function renderAdminUserRows(users, usersBody, lbBody) {
         const adjClass = u.score_adjustment > 0 ? 'adj-positive' : (u.score_adjustment < 0 ? 'adj-negative' : 'adj-zero');
         const withheldClass = u.withheld ? 'withheld-yes' : 'withheld-no';
         const lbRow = document.createElement('tr');
+        lbRow.dataset.username = u.username.toLowerCase();
         lbRow.innerHTML = `
             <td>${escapeHtml(u.username)}</td>
             <td>(Calculated on Server)</td>
@@ -106,25 +127,32 @@ export async function loadAdminPanel(append = false) {
 
     if (!append) adminUsersOffset = 0;
 
-    const res = await fetch(`/api/admin/users?limit=${ADMIN_USERS_LIMIT}&offset=${adminUsersOffset}`);
-    if (!res.ok) {
-        usersBody.innerHTML = `<tr><td colspan="4" class="error-center">Error loading users.</td></tr>`;
-        return;
-    }
-    const data = await res.json();
+    try {
+        const res = await apiFetch(`/api/admin/users?limit=${ADMIN_USERS_LIMIT}&offset=${adminUsersOffset}`);
+        if (!res.ok) {
+            usersBody.innerHTML = `<tr><td colspan="4" class="error-center">Error loading users.</td></tr>`;
+            return;
+        }
+        const data = await res.json();
 
-    if (!append) {
-        usersBody.innerHTML = '';
-        lbBody.innerHTML = '';
-    }
+        if (!append) {
+            usersBody.innerHTML = '';
+            lbBody.innerHTML = '';
+        }
 
-    renderAdminUserRows(data.users, usersBody, lbBody);
-    bindAdminUserButtons();
+        renderAdminUserRows(data.users, usersBody, lbBody);
+        bindAdminUserButtons();
+        applyAdminUserSearch(document.querySelector('.admin-user-search')?.value || '');
 
-    if (data.hasMore) {
-        adminUsersOffset = data.offset + data.users.length;
+        if (data.hasMore) {
+            adminUsersOffset = data.offset + data.users.length;
+        }
+        appendAdminUsersLoadMore(data.hasMore);
+    } catch (err) {
+        if (!append) {
+            usersBody.innerHTML = `<tr><td colspan="4" class="error-center">${escapeHtml(isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Error loading users.')}</td></tr>`;
+        }
     }
-    appendAdminUsersLoadMore(data.hasMore);
 }
 
 export function adminPromptCreateUser() {
@@ -150,10 +178,14 @@ async function adminExecuteCreateUser() {
     const password = document.getElementById('admin-new-pass').value;
     const is_admin = window.isOwner && document.getElementById('admin-new-isadmin')?.checked;
 
-    const res = await securePost('/api/admin/users', { username, email, password, is_admin });
-    const data = await res.json();
-    if (data.error) alert(data.error);
-    else { closeModal(); loadAdminPanel(); }
+    try {
+        const res = await securePost('/api/admin/users', { username, email, password, is_admin });
+        const data = await res.json();
+        if (data.error) await showAlert(data.error, { title: 'Error' });
+        else { closeModal(); loadAdminPanel(); }
+    } catch (err) {
+        await showNetworkError(err);
+    }
 }
 
 function adminPromptPassword(id, username) {
@@ -174,10 +206,14 @@ function adminPromptPassword(id, username) {
 async function adminExecutePassword(id) {
     const password = document.getElementById('admin-reset-pass').value;
     const current_password = document.getElementById('admin-current-pass').value;
-    const res = await securePost(`/api/admin/users/${id}/password`, { password, current_password });
-    const data = await res.json();
-    if (data.error) alert(data.error);
-    else { alert('Password updated.'); closeModal(); }
+    try {
+        const res = await securePost(`/api/admin/users/${id}/password`, { password, current_password });
+        const data = await res.json();
+        if (data.error) await showAlert(data.error, { title: 'Error' });
+        else { await showAlert('Password updated.'); closeModal(); }
+    } catch (err) {
+        await showNetworkError(err);
+    }
 }
 
 function adminPromptScore(id, username, currentAdj, currentWithheld) {
@@ -203,10 +239,14 @@ async function adminExecuteScore(id) {
     const adjustment = document.getElementById('admin-score-adj').value;
     const withheld = document.getElementById('admin-score-withhold').checked;
     const current_password = document.getElementById('admin-score-current-pass').value;
-    const res = await securePost(`/api/admin/users/${id}/score`, { adjustment, withheld, current_password });
-    const data = await res.json();
-    if (data.error) alert(data.error);
-    else { closeModal(); loadAdminPanel(); }
+    try {
+        const res = await securePost(`/api/admin/users/${id}/score`, { adjustment, withheld, current_password });
+        const data = await res.json();
+        if (data.error) await showAlert(data.error, { title: 'Error' });
+        else { closeModal(); loadAdminPanel(); }
+    } catch (err) {
+        await showNetworkError(err);
+    }
 }
 
 function adminPromptRole(id, username, isAdmin) {
@@ -227,19 +267,47 @@ function adminPromptRole(id, username, isAdmin) {
 
 async function adminExecuteRole(id, grantAdmin) {
     const current_password = document.getElementById('admin-role-current-pass').value;
-    const res = await securePost(`/api/admin/users/${id}/admin`, { is_admin: grantAdmin, current_password });
-    const data = await res.json();
-    if (data.error) alert(data.error);
-    else { closeModal(); loadAdminPanel(); }
+    try {
+        const res = await securePost(`/api/admin/users/${id}/admin`, { is_admin: grantAdmin, current_password });
+        const data = await res.json();
+        if (data.error) await showAlert(data.error, { title: 'Error' });
+        else { closeModal(); loadAdminPanel(); }
+    } catch (err) {
+        await showNetworkError(err);
+    }
+}
+
+function adminPromptDelete(id, username) {
+    showModal(`
+        <h2 class="text-accent mb-20">Delete User: ${escapeHtml(username)}</h2>
+        <p class="text-muted mb-20">This permanently deletes the user and all their submissions. This cannot be undone.</p>
+        <div class="mb-20">
+            <input type="password" id="admin-delete-current-pass" class="field-input" placeholder="Your Current Password" autocomplete="current-password">
+        </div>
+        <button id="btn-admin-delete-exec" data-id="${id}" class="btn-block btn-danger">Delete User</button>
+    `);
+    document.getElementById('btn-admin-delete-exec').addEventListener('click', (e) => adminExecuteDelete(e.target.dataset.id));
+}
+
+async function adminExecuteDelete(id) {
+    const current_password = document.getElementById('admin-delete-current-pass').value;
+    try {
+        const res = await securePost(`/api/admin/users/${id}`, { current_password }, 'DELETE');
+        const data = await res.json();
+        if (data.error) await showAlert(data.error, { title: 'Error' });
+        else { closeModal(); loadAdminPanel(); }
+    } catch (err) {
+        await showNetworkError(err);
+    }
 }
 
 async function adminDeleteUser(id, username) {
-    if (confirm(`Are you sure you want to permanently delete user '${username}' and ALL their submissions?`)) {
-        const res = await securePost(`/api/admin/users/${id}`, {}, 'DELETE');
-        const data = await res.json();
-        if (data.error) alert(data.error);
-        else loadAdminPanel();
-    }
+    if (!await showConfirm(
+        `Are you sure you want to permanently delete user '${username}' and ALL their submissions?`,
+        { title: 'Delete User', confirmLabel: 'Delete', danger: true }
+    )) return;
+
+    adminPromptDelete(id, username);
 }
 
 function submissionRowHtml(s, userId, username) {
@@ -255,98 +323,114 @@ function submissionRowHtml(s, userId, username) {
     `;
 }
 
-function bindSubmissionDeleteButtons(userId, username) {
-    document.querySelectorAll('.btn-admin-del-sub').forEach(btn => {
-        btn.addEventListener('click', (e) => adminDeleteSubmission(
-            e.target.dataset.subid, e.target.dataset.userid, e.target.dataset.username
-        ));
+let submissionListActionsBound = false;
+
+function ensureSubmissionListActions() {
+    if (submissionListActionsBound) return;
+    submissionListActionsBound = true;
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-admin-del-sub');
+        if (!btn || !btn.closest('#admin-sub-list')) return;
+        adminDeleteSubmission(btn.dataset.subid, btn.dataset.userid, btn.dataset.username);
     });
 }
 
 async function adminViewSubmissions(userId, username, offset = 0) {
-    const res = await fetch(`/api/admin/users/${userId}/submissions?limit=${ADMIN_SUBS_LIMIT}&offset=${offset}`);
-    const data = await res.json();
+    try {
+        const res = await apiFetch(`/api/admin/users/${userId}/submissions?limit=${ADMIN_SUBS_LIMIT}&offset=${offset}`);
+        const data = await res.json();
 
-    if (data.error) {
-        showModal(`<h2 class="text-accent mb-15">Submissions: ${escapeHtml(username)}</h2><div>${escapeHtml(data.error)}</div>`);
-        return;
-    }
+        if (data.error) {
+            showModal(`<h2 class="text-accent mb-15">Submissions: ${escapeHtml(username)}</h2><div>${escapeHtml(data.error)}</div>`);
+            return;
+        }
 
-    if (offset === 0) {
-        let listHtml;
-        if (data.submissions.length === 0) {
-            listHtml = "<div class='text-muted'>No submissions found.</div>";
-        } else {
-            let tableHtml = `<div class="table-scroll table-scroll-400"><table class="admin-table"><thead><tr><th>ID</th><th>Lab ID</th><th>Type</th><th>Score</th><th>Date</th><th>Actions</th></tr></thead><tbody id="admin-sub-tbody">`;
-            data.submissions.forEach(s => { tableHtml += submissionRowHtml(s, userId, username); });
-            tableHtml += '</tbody></table></div>';
-            if (data.hasMore) {
-                tableHtml += `<button type="button" id="admin-subs-load-more" class="btn-secondary btn-small mt-12">Load more submissions</button>`;
+        if (offset === 0) {
+            let listHtml;
+            if (data.submissions.length === 0) {
+                listHtml = "<div class='text-muted'>No submissions found.</div>";
+            } else {
+                let tableHtml = `<div class="table-scroll table-scroll-400"><table class="admin-table"><thead><tr><th>ID</th><th>Lab ID</th><th>Type</th><th>Score</th><th>Date</th><th>Actions</th></tr></thead><tbody id="admin-sub-tbody">`;
+                data.submissions.forEach(s => { tableHtml += submissionRowHtml(s, userId, username); });
+                tableHtml += '</tbody></table></div>';
+                if (data.hasMore) {
+                    tableHtml += `<button type="button" id="admin-subs-load-more" class="btn-secondary btn-small mt-12">Load more submissions</button>`;
+                }
+                listHtml = tableHtml;
             }
-            listHtml = tableHtml;
+            showModal(`<h2 class="text-accent mb-15">Submissions: ${escapeHtml(username)}</h2><div id="admin-sub-list">${listHtml}</div>`);
+            ensureSubmissionListActions();
+            const loadBtn = document.getElementById('admin-subs-load-more');
+            if (loadBtn) {
+                loadBtn.addEventListener('click', () => {
+                    adminViewSubmissions(userId, username, offset + data.submissions.length);
+                });
+            }
+            return;
         }
-        showModal(`<h2 class="text-accent mb-15">Submissions: ${escapeHtml(username)}</h2><div id="admin-sub-list">${listHtml}</div>`);
-        bindSubmissionDeleteButtons(userId, username);
-        const loadBtn = document.getElementById('admin-subs-load-more');
-        if (loadBtn) {
-            loadBtn.addEventListener('click', () => {
-                adminViewSubmissions(userId, username, offset + data.submissions.length);
-            });
-        }
-        return;
-    }
 
-    const tbody = document.getElementById('admin-sub-tbody');
-    data.submissions.forEach(s => {
-        tbody.insertAdjacentHTML('beforeend', submissionRowHtml(s, userId, username));
-    });
-    bindSubmissionDeleteButtons(userId, username);
-
-    const loadBtn = document.getElementById('admin-subs-load-more');
-    if (data.hasMore && loadBtn) {
-        const nextOffset = offset + data.submissions.length;
-        loadBtn.replaceWith(loadBtn.cloneNode(true));
-        document.getElementById('admin-subs-load-more').addEventListener('click', () => {
-            adminViewSubmissions(userId, username, nextOffset);
+        const tbody = document.getElementById('admin-sub-tbody');
+        if (!tbody) return;
+        data.submissions.forEach(s => {
+            tbody.insertAdjacentHTML('beforeend', submissionRowHtml(s, userId, username));
         });
-    } else if (loadBtn) {
-        loadBtn.remove();
+
+        const loadBtn = document.getElementById('admin-subs-load-more');
+        if (data.hasMore && loadBtn) {
+            const nextOffset = offset + data.submissions.length;
+            loadBtn.replaceWith(loadBtn.cloneNode(true));
+            document.getElementById('admin-subs-load-more').addEventListener('click', () => {
+                adminViewSubmissions(userId, username, nextOffset);
+            });
+        } else if (loadBtn) {
+            loadBtn.remove();
+        }
+    } catch (err) {
+        const msg = isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Failed to load submissions.';
+        showModal(`<h2 class="text-accent mb-15">Submissions: ${escapeHtml(username)}</h2><div class="error-center">${escapeHtml(msg)}</div>`);
     }
 }
 
 async function adminDeleteSubmission(subId, userId, username) {
-    if (confirm(`Delete submission #${subId}?`)) {
+    if (!await showConfirm(
+        `Delete submission #${subId}?`,
+        { title: 'Delete Submission', confirmLabel: 'Delete', danger: true }
+    )) return;
+
+    try {
         const res = await securePost(`/api/admin/submissions/${subId}`, {}, 'DELETE');
         const data = await res.json();
-        if (data.error) alert(data.error);
+        if (data.error) await showAlert(data.error, { title: 'Error' });
         else adminViewSubmissions(userId, username);
+    } catch (err) {
+        await showNetworkError(err);
     }
 }
 
 function formatAuditActor(entry) {
     if (entry.actor_username) return escapeHtml(entry.actor_username);
     if (entry.actor_user_id) return `#${escapeHtml(String(entry.actor_user_id))}`;
-    return '—';
+    return '-';
 }
 
 function formatAuditTarget(entry) {
     if (entry.target_username) return escapeHtml(entry.target_username);
     if (entry.target_user_id) return `#${escapeHtml(String(entry.target_user_id))}`;
-    return '—';
+    return '-';
 }
 
 function auditRowHtml(entry) {
     const label = AUDIT_EVENT_LABELS[entry.event_type] || escapeHtml(entry.event_type);
-    const time = entry.created_at ? new Date(entry.created_at).toLocaleString() : '—';
+    const time = entry.created_at ? new Date(entry.created_at).toLocaleString() : '-';
     return `
         <tr>
             <td>${escapeHtml(time)}</td>
             <td>${escapeHtml(label)}</td>
             <td>${formatAuditActor(entry)}</td>
             <td>${formatAuditTarget(entry)}</td>
-            <td>${entry.lab_id ? escapeHtml(entry.lab_id) : '—'}</td>
-            <td>${entry.source ? escapeHtml(entry.source) : '—'}</td>
-            <td class="audit-detail-cell">${entry.detail ? escapeHtml(entry.detail) : '—'}</td>
+            <td>${entry.lab_id ? escapeHtml(entry.lab_id) : '-'}</td>
+            <td>${entry.source ? escapeHtml(entry.source) : '-'}</td>
+            <td class="audit-detail-cell">${entry.detail ? escapeHtml(entry.detail) : '-'}</td>
         </tr>
     `;
 }
@@ -383,27 +467,86 @@ export async function loadAuditLog(append = false) {
     });
     if (eventType) params.set('event_type', eventType);
 
-    const res = await fetch(`/api/admin/audit-log?${params}`);
-    if (!res.ok) {
-        if (!append) tbody.innerHTML = `<tr><td colspan="7" class="error-center">Error loading audit log.</td></tr>`;
-        return;
+    try {
+        const res = await apiFetch(`/api/admin/audit-log?${params}`);
+        if (!res.ok) {
+            if (!append) tbody.innerHTML = `<tr><td colspan="7" class="error-center">Error loading audit log.</td></tr>`;
+            return;
+        }
+        const data = await res.json();
+
+        if (!append) tbody.innerHTML = '';
+
+        if (data.entries.length === 0 && !append) {
+            tbody.innerHTML = `<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px;">No audit entries yet.</td></tr>`;
+            appendAuditLoadMore(false);
+            return;
+        }
+
+        data.entries.forEach(entry => {
+            tbody.insertAdjacentHTML('beforeend', auditRowHtml(entry));
+        });
+
+        if (data.hasMore) {
+            auditLogOffset = data.offset + data.entries.length;
+        }
+        appendAuditLoadMore(data.hasMore);
+    } catch (err) {
+        if (!append) {
+            const msg = isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Error loading audit log.';
+            tbody.innerHTML = `<tr><td colspan="7" class="error-center">${escapeHtml(msg)}</td></tr>`;
+        }
     }
-    const data = await res.json();
+}
 
-    if (!append) tbody.innerHTML = '';
-
-    if (data.entries.length === 0 && !append) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px;">No audit entries yet.</td></tr>`;
-        appendAuditLoadMore(false);
-        return;
+export async function loadAnalyticsLabOptions() {
+    const select = document.getElementById('analytics-lab-select');
+    if (!select) return;
+    try {
+        const res = await apiFetch('/api/config');
+        if (!res.ok) return;
+        const data = await res.json();
+        const labs = (data.challenges || []).filter((c) => c.type !== 'quiz');
+        select.innerHTML = labs.map((l) => `<option value="${escapeHtml(l.id)}">${escapeHtml(l.title || l.id)}</option>`).join('');
+    } catch {
+        /* analytics lab list is optional on failure */
     }
+}
 
-    data.entries.forEach(entry => {
-        tbody.insertAdjacentHTML('beforeend', auditRowHtml(entry));
-    });
+export async function loadLabAnalytics() {
+    const select = document.getElementById('analytics-lab-select');
+    const labId = select?.value;
+    if (!labId) return;
 
-    if (data.hasMore) {
-        auditLogOffset = data.offset + data.entries.length;
+    try {
+        const res = await apiFetch(`/api/admin/labs/${encodeURIComponent(labId)}/analytics`);
+        if (!res.ok) {
+            showAlert('Failed to load lab analytics.');
+            return;
+        }
+        const data = await res.json();
+        const summary = document.getElementById('analytics-summary');
+        if (summary) {
+            summary.innerHTML = `
+            <p><strong>${escapeHtml(data.lab.title)}</strong> - ${data.total_attempts} attempt(s), ${data.unique_users} user(s), median time: ${data.median_duration_seconds ?? '-'}s</p>
+        `;
+        }
+
+        const tbody = document.getElementById('admin-analytics-body');
+        if (tbody) {
+            tbody.innerHTML = '';
+            (data.attempt_timeline || []).forEach((row) => {
+                tbody.insertAdjacentHTML('beforeend', `
+                <tr>
+                    <td>${escapeHtml(row.username)}</td>
+                    <td>${row.score}/${row.max_score}</td>
+                    <td>${row.duration_seconds ?? '-'}</td>
+                    <td>${escapeHtml(row.timestamp)}</td>
+                </tr>
+            `);
+            });
+        }
+    } catch (err) {
+        await showNetworkError(err, { title: 'Analytics' });
     }
-    appendAuditLoadMore(data.hasMore);
 }

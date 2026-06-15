@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lab</title>
     <script src="/socket.io/socket.io.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="modulepreload" href="/js/state.js">
+    <link rel="modulepreload" href="/js/utils.js">
+    <link rel="modulepreload" href="/js/nav.js">
+    <link rel="modulepreload" href="/js/shell.js">
     <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -70,12 +71,12 @@
                     <div class="upload-area stream-pick-area hidden" id="stream-pick-area">
                         <div class="upload-icon stream-icon" aria-hidden="true">&#8635;</div>
                         <div class="upload-title">Pick File to Stream</div>
-                        <div class="upload-hint">Uses live file access — save Packet Tracer often</div>
+                        <div class="upload-hint">Uses live file access - save Packet Tracer often</div>
                         <div id="stream-file-name" class="stream-file-name"></div>
                         <div id="stream-next-check" class="stream-next-check hidden"></div>
                     </div>
                     <div class="lab-submit-row">
-                        <button type="button" id="btn-lab-submit" class="intro-action" disabled title="Final submission — confirms before grading">Submit</button>
+                        <button type="button" id="btn-lab-submit" class="intro-action" disabled title="Final submission - confirms before grading">Submit</button>
                     </div>
                     <div id="progress-container"><div id="progress-bar"></div></div>
                     <div id="status"></div>

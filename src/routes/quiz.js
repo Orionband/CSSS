@@ -3,17 +3,18 @@ const express = require('express');
  const fs = require('fs');
  const crypto = require('crypto');
 const db = require('../database');
-const { elapsedSecondsSince } = require('../submissionDuration');
+const { elapsedSecondsSince, parseDbTimestamp } = require('../submissionDuration');
 const { getConfig, isWindowOpen } = require('../config');
  const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
 const rateLimit = require('express-rate-limit');
 const { rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
 const { logServerError } = require('../auditLog');
+const { invalidateLeaderboardCache } = require('../leaderboardCache');
 const router = express.Router();
 
 const quizSubmitLimiter = rateLimit(rateLimitPreset({
     windowMs: 60 * 1000,
-    max: 5,
+    max: 10,
     message: { error: "Too many quiz submissions. Please wait before trying again." },
 }));
 
@@ -25,7 +26,7 @@ const quizStartLimiter = rateLimit(rateLimitPreset({
 
 const quizAssetLimiter = rateLimit(rateLimitPreset({
     windowMs: 60 * 1000,
-    max: 10,
+    max: 30,
     message: { error: "Too many asset downloads. Please wait before trying again." },
 }));
 
@@ -68,21 +69,21 @@ function shuffle(array) {
     return array;
 }
 
-function parseDbTime(dbTimestamp) {
-    return new Date(dbTimestamp.replace(' ', 'T') + 'Z').getTime();
-}
-
 /** RE2 flags for text questions: default case-insensitive; set regex_flags in quiz config (e.g. "" or "m"). */
 function quizTextRegexFlags(q) {
     if (q.regex_flags === undefined || q.regex_flags === null) return 'i';
     return String(q.regex_flags).replace(/[^im]/g, '');
 }
 
-setInterval(() => {
+let quizSweeperTimer = null;
+function startQuizSweeper() {
+    if (quizSweeperTimer || process.env.NODE_ENV === 'test') return;
+    quizSweeperTimer = setInterval(() => {
     try {
         const inProgress = db.prepare("SELECT * FROM submissions WHERE status = 'in_progress' AND type = 'quiz'").all();
         const cfg = getConfig();
         const quizzes = cfg.quizzes || [];
+        let cacheDirty = false;
 
         inProgress.forEach(sub => {
             const qCfg = quizzes.find(q => q.id === sub.lab_id);
@@ -93,7 +94,7 @@ setInterval(() => {
             const timeLimitMinutes = getConfigNumber(qCfg.time_limit_minutes, 0);
 
             if (timeLimitMinutes > 0) {
-                const startTime = parseDbTime(sub.timestamp);
+                const startTime = parseDbTimestamp(sub.timestamp);
                 const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
                 if (elapsedSeconds > (timeLimitMinutes * 60) + 2) {
                     closeSession = true;
@@ -115,18 +116,26 @@ setInterval(() => {
 
             try {
                 const durationSeconds = elapsedSecondsSince(sub.timestamp);
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
+                const result = db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
                   .run(JSON.stringify([{message: reason, correct: false}]), durationSeconds, sub.id);
-                db.clearQuizMappingsForUser(sub.user_id, sub.lab_id);
+                if (result.changes > 0) {
+                    cacheDirty = true;
+                    db.clearQuizMappingsForUser(sub.user_id, sub.lab_id);
+                }
             } finally {
                 db.releaseLock(lockKey);
             }
         });
+
+        if (cacheDirty) invalidateLeaderboardCache();
     } catch (e) {
         logServerError({ detail: e.message, source: 'quiz_sweeper' });
         console.error("Error in quiz sweeper:", e.message);
     }
 }, 60 * 1000);
+    if (typeof quizSweeperTimer.unref === 'function') quizSweeperTimer.unref();
+}
+startQuizSweeper();
 
 router.get('/asset/:type/:filename', quizAssetLimiter, (req, res) => {
     if (!req.session.userId) return res.status(401).send("Unauthorized");
@@ -242,7 +251,7 @@ router.get('/:id', quizLimiter, (req, res) => {
     if (existingInProgress) {
         sessionActive = true;
         if (timeLimitMinutes > 0) {
-            const startTime = parseDbTime(existingInProgress.timestamp);
+            const startTime = parseDbTimestamp(existingInProgress.timestamp);
             const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
             timeRemaining = Math.max(0, (timeLimitMinutes * 60) - elapsedSeconds);
 
@@ -291,7 +300,7 @@ router.post('/:id/start', quizStartLimiter, (req, res) => {
 
         if (existingInProgress) {
             if (timeLimitMinutes > 0) {
-                const startTime = parseDbTime(existingInProgress.timestamp);
+                const startTime = parseDbTimestamp(existingInProgress.timestamp);
                 const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
                 timeRemaining = Math.max(0, timeRemaining - elapsedSeconds);
 
@@ -430,7 +439,7 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
 
         const submitTimeLimitMinutes = getConfigNumber(quiz.time_limit_minutes, 0);
         if (submitTimeLimitMinutes > 0) {
-            const startTime = parseDbTime(existingInProgress.timestamp);
+            const startTime = parseDbTimestamp(existingInProgress.timestamp);
             const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
             
             if (elapsedSeconds > (submitTimeLimitMinutes * 60) + 2) {
@@ -545,6 +554,7 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
         const showCorrections = quiz.show_corrections !== false;
 
         clearMappingsOnExit = true;
+        invalidateLeaderboardCache();
         res.json({
             success: true,
             score: showScore ? score : null,
@@ -553,6 +563,14 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
         });
     } catch (e) {
         logServerError({ userId: req.session.userId, labId: quiz.id, detail: e.message, source: 'quiz_submit' });
+        try {
+            const latest = db.prepare(
+                "SELECT status FROM submissions WHERE user_id = ? AND lab_id = ? AND type = 'quiz' ORDER BY id DESC LIMIT 1"
+            ).get(req.session.userId, quiz.id);
+            if (!latest || latest.status !== 'in_progress') {
+                clearMappingsOnExit = true;
+            }
+        } catch (_) { /* keep mappings when retry may still be valid */ }
         res.status(500).json({ error: "An internal error occurred." });
     } finally {
         db.releaseLock(lockKey);

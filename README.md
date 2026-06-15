@@ -12,11 +12,57 @@
 - Because of the removal of the answer network/not grading in activity wizard, there can't be any dynamic feedback unless the user constantly uploads the packet tracer.
 - It's toml cuz aeacus
 
+## Fonts
+
+The UI uses self-hosted **Roboto Mono** (weights 400 and 700) in [`public/fonts/`](public/fonts/). License: Apache 2.0 — see [`public/fonts/LICENSE.txt`](public/fonts/LICENSE.txt).
+
 ## Running the Server
 1.  `npm install`
 2.  `node quickstart.js` (setup environment)
 3.  `npm start`
 4.  Access at `http://localhost:10000`
+
+Before deploying or editing config, validate TOML files:
+
+```bash
+npm run validate-config
+```
+
+### Config validation
+
+The server **loads** `lab.conf` and `quiz.conf` even when validation finds problems; it prints warnings to the console and continues starting. Use `npm run validate-config` for a **strict** check (exit code 1 on failure) in CI or before deploy.
+
+Set `CSSS_SKIP_ASSET_VALIDATION=true` in `.env` to skip missing `pka_file` checks during local dev or tests.
+
+| Area | Rules |
+|------|--------|
+| IDs | `^[a-zA-Z0-9_-]+$`, unique across labs and quizzes |
+| Lab windows | `comp_start` / `comp_end` must be valid ISO datetimes; start must be before end |
+| Upload caps | `max_upload_mb` between 1 and 50 (socket buffer limit); `max_xml_output_mb` must be positive |
+| PKA assets | `pka_file` must exist under the project root unless asset checks are skipped |
+| Lab checks | Each check needs `device`, `points`, and at least one `pass` or `passoverride` block; type must be a known check type; regex patterns must compile (RE2) |
+| Quizzes | Question `type` must be `radio`, `checkbox`, `text`, or `matching`; radio questions need exactly one correct answer; checkbox needs at least one; text questions need `regex`; matching questions need non-empty `pairs` |
+
+This checks duplicate IDs, time windows, check shapes, regex compilation, and that `pka_file` paths exist. If PKA files are not on disk yet (local dev), set `CSSS_SKIP_ASSET_VALIDATION=true` in `.env` or place assets under `protected/pka/` and reference them correctly in `lab.conf`.
+
+---
+
+## Testing
+
+```bash
+npm test              # unit + integration tests
+npm run test:perf     # PKA decrypt performance (slow; optional)
+npm run check           # eslint + tests
+npm run validate-config # validate lab.conf / quiz.conf
+```
+
+Tests run against **isolated temp SQLite databases** (not `grader.db`) with a **mock grader pool** — no worker threads are started. The harness sets `NODE_ENV=test` and `CSSS_SKIP_ASSET_VALIDATION=true` automatically.
+
+Integration coverage includes CSRF enforcement, admin/owner boundaries, lab competition windows, quiz opaque answer IDs, socket grading-slot lifecycle, socket upload grading, session invalidation, and `/health`.
+
+Each suite tears down HTTP/Socket.IO servers, closes temp and singleton database handles, and resets config overrides in `after()` hooks. Call `ctx.close()` in any custom test that uses `createTestApp()`.
+
+`npm test` passes `--test-force-exit` because Socket.IO’s engine can leave an internal handle ref’d after teardown on some platforms; all application resources (DB, HTTP server, timers) are still closed explicitly in `ctx.close()`.
 
 ---
 
@@ -68,7 +114,7 @@ pka_file = "lab1_starter.pka"
 ```
 
 - `show_score`, `show_check_messages`, `show_missed_points`: Configures student feedback after submission.
-- `comp_start` and `comp_end`: Configures the global competition window in UTC. Format:Format: YYYY-MM-DDTHH:MM:SSZ. If omitted/unset, the lab is always open.
+- `comp_start` and `comp_end`: Configures the global competition window in UTC. Format: YYYY-MM-DDTHH:MM:SSZ. If omitted/unset, the lab is always open.
 - `time_limit_minutes`: Enforces a strict server-side deadline once the student clicks "Start Lab".
 - `pka_file`: The filename of the starting file (must be in `protected/pka/`).
 - `max_submissions`: The maximum times a student can submit (final lab attempts only; live-stream poll grades do not count toward this limit).
@@ -282,5 +328,5 @@ explanation = ""
     right = "Cisco"
 ```
 ## Free Servers & Configuration Builder
-*   You can deploy CSSS to [Koyeb](https://www.koyeb.com/) or [Render](https://render.com/).
+*   You can deploy CSSS to [Koyeb](https://www.koyeb.com/) or use something like ngrok
 *   Use [cron-job.org](https://console.cron-job.org/login) to ping the server every 10 minutes to prevent sleeping.

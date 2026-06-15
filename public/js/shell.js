@@ -1,11 +1,14 @@
 import { state } from './state.js';
-import { applyBranding, closeModal, fetchCsrfToken } from './utils.js';
+import { applyBranding, closeModal, fetchCsrfToken, apiFetch, NETWORK_ERROR_MESSAGE, escapeHtml } from './utils.js';
 import { renderNav } from './nav.js';
 import { logout, clearBootstrapCache } from './auth.js';
 import { renderChallengesList } from './challenges.js';
 
 const BOOTSTRAP_CACHE_KEY = 'csss_bootstrap';
 const BOOTSTRAP_TTL_MS = 120000;
+
+let offlineListenersBound = false;
+let bootstrapRetryHandler = null;
 
 function readBootstrapCache() {
     try {
@@ -17,6 +20,11 @@ function readBootstrapCache() {
     } catch {
         return null;
     }
+}
+
+async function ensureCsrfToken() {
+    if (state.csrfToken) return;
+    await fetchCsrfToken();
 }
 
 export function writeBootstrapCache(data) {
@@ -56,8 +64,8 @@ function connectSocket(uid) {
 
 async function fetchBootstrapFallback() {
     const [meRes, cfgRes] = await Promise.all([
-        fetch('/api/me', { credentials: 'same-origin' }),
-        fetch('/api/config', { credentials: 'same-origin' }),
+        apiFetch('/api/me', { credentials: 'same-origin' }),
+        apiFetch('/api/config', { credentials: 'same-origin' }),
     ]);
     if (meRes.status === 401) return { unauthorized: true };
     const meData = await meRes.json();
@@ -76,34 +84,107 @@ async function fetchBootstrapFallback() {
 }
 
 async function fetchBootstrapData() {
-    const res = await fetch('/api/bootstrap', { credentials: 'same-origin' });
+    const res = await apiFetch('/api/bootstrap', { credentials: 'same-origin' });
     if (res.ok) return res.json();
     if (res.status === 401) return { unauthorized: true };
     if (res.status === 404) return fetchBootstrapFallback();
     throw new Error(`Bootstrap failed (${res.status})`);
 }
 
-export async function initShell(activePage, { connectSocket: useSocket = false } = {}) {
-    const cached = readBootstrapCache();
-    if (cached) applyBootstrap(cached, activePage);
+function ensureOfflineBanner() {
+    let banner = document.getElementById('network-offline-banner');
+    if (banner) return banner;
 
-    let data = cached;
+    banner = document.createElement('div');
+    banner.id = 'network-offline-banner';
+    banner.className = 'network-offline-banner hidden';
+    banner.setAttribute('role', 'status');
+    banner.textContent = "You're offline. Some features may not work until you reconnect.";
+    document.body.prepend(banner);
+    return banner;
+}
+
+function updateOfflineBanner() {
+    const banner = ensureOfflineBanner();
+    banner.classList.toggle('hidden', navigator.onLine);
+}
+
+function bindOfflineListeners() {
+    if (offlineListenersBound) return;
+    offlineListenersBound = true;
+    updateOfflineBanner();
+    window.addEventListener('online', updateOfflineBanner);
+    window.addEventListener('offline', updateOfflineBanner);
+}
+
+function hideBootstrapFailureBanner() {
+    document.getElementById('bootstrap-failure-banner')?.remove();
+}
+
+function showBootstrapFailureBanner(onRetry) {
+    hideBootstrapFailureBanner();
+
+    const host = document.getElementById('main-content') || document.body;
+    const banner = document.createElement('div');
+    banner.id = 'bootstrap-failure-banner';
+    banner.className = 'bootstrap-failure-banner';
+    banner.innerHTML = `
+        <p>${escapeHtml(NETWORK_ERROR_MESSAGE)}</p>
+        <button type="button" class="btn-secondary btn-small" id="bootstrap-retry-btn">Retry</button>
+    `;
+    host.prepend(banner);
+    document.getElementById('bootstrap-retry-btn')?.addEventListener('click', onRetry);
+}
+
+async function loadBootstrap(activePage) {
+    let data = readBootstrapCache();
+    if (data) applyBootstrap(data, activePage);
+
     try {
         data = await fetchBootstrapData();
         if (data.unauthorized) {
             clearBootstrapCache();
             location.href = '/';
-            return false;
+            return { ok: false, unauthorized: true };
         }
         writeBootstrapCache(data);
         applyBootstrap(data, activePage);
+        hideBootstrapFailureBanner();
+        return { ok: true, data };
     } catch {
-        if (!data) return false;
+        if (!data) return { ok: false, data: null };
+        return { ok: true, data, stale: true };
+    }
+}
+
+export async function initShell(activePage, { connectSocket: useSocket = false } = {}) {
+    bindOfflineListeners();
+
+    const result = await loadBootstrap(activePage);
+    if (result.unauthorized) return false;
+
+    let data = result.data;
+    if (!result.ok) {
+        showBootstrapFailureBanner(async () => {
+            if (bootstrapRetryHandler) return;
+            bootstrapRetryHandler = true;
+            try {
+                const retry = await loadBootstrap(activePage);
+                if (retry.ok && retry.data) {
+                    data = retry.data;
+                    await ensureCsrfToken();
+                    if (useSocket && data.user?.unique_id) connectSocket(data.user.unique_id);
+                }
+            } finally {
+                bootstrapRetryHandler = false;
+            }
+        });
+        return false;
     }
 
-    await fetchCsrfToken();
+    await ensureCsrfToken();
 
-    if (useSocket && data.user?.unique_id) connectSocket(data.user.unique_id);
+    if (useSocket && data?.user?.unique_id) connectSocket(data.user.unique_id);
 
     document.getElementById('btn-logout')?.addEventListener('click', logout);
     document.getElementById('modal-close-btn')?.addEventListener('click', closeModal);

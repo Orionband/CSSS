@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="modulepreload" href="/js/state.js">
+    <link rel="modulepreload" href="/js/utils.js">
+    <link rel="modulepreload" href="/js/nav.js">
+    <link rel="modulepreload" href="/js/shell.js">
     <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -35,12 +36,17 @@
                     <div class="admin-tabs">
                         <div class="admin-tab active" id="tab-admin-users">Manage Users</div>
                         <div class="admin-tab" id="tab-admin-lb">Manage Leaderboard</div>
+                        <div class="admin-tab" id="tab-admin-analytics">Lab Analytics</div>
                         <div class="admin-tab" id="tab-admin-audit">Audit Log</div>
                     </div>
                 </div>
 
                 <div id="admin-panel-users" class="admin-panel-content">
                     <div class="admin-toolbar">
+                        <label class="audit-filter-label admin-toolbar-search">
+                            Search:
+                            <input type="search" class="field-input audit-filter-input admin-user-search" placeholder="Username" autocomplete="off" spellcheck="false">
+                        </label>
                         <button class="btn-secondary btn-small" id="btn-admin-new-user">+ Create New User</button>
                     </div>
                     <div class="table-wrapper">
@@ -54,6 +60,29 @@
                                 </tr>
                             </thead>
                             <tbody id="admin-users-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="admin-panel-analytics" class="admin-panel-content hidden">
+                    <div class="admin-toolbar">
+                        <label class="audit-filter-label">
+                            Lab:
+                            <select id="analytics-lab-select" class="field-input audit-filter-select"></select>
+                        </label>
+                    </div>
+                    <div id="analytics-summary" class="analytics-summary"></div>
+                    <div class="table-wrapper">
+                        <table class="admin-table" id="admin-analytics-table">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Score</th>
+                                    <th>Duration</th>
+                                    <th>Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-analytics-body"></tbody>
                         </table>
                     </div>
                 </div>
@@ -93,6 +122,12 @@
                 </div>
 
                 <div id="admin-panel-lb" class="admin-panel-content hidden">
+                    <div class="admin-toolbar">
+                        <label class="audit-filter-label admin-toolbar-search">
+                            Search:
+                            <input type="search" class="field-input audit-filter-input admin-user-search" placeholder="Username" autocomplete="off" spellcheck="false">
+                        </label>
+                    </div>
                     <div class="table-wrapper">
                         <table class="admin-table" id="admin-lb-table">
                             <thead>

@@ -8,12 +8,17 @@ const { sanitizeUsername, sanitizeEmail, MAX_FIELD_LEN } = require('../sanitizeU
 const { validatePasswordPolicy } = require('../passwordPolicy');
 const { parsePagination, MAX_LEADERBOARD, rateLimitPreset, getConfigNumber, ensureArray, resolveUploadMb } = require('../limits');
 const { buildLeaderboard, buildEntryForUser, getBestSubmissionsMaps } = require('../leaderboardScores');
+const { getCachedLeaderboard } = require('../leaderboardCache');
 const { elapsedSecondsSince, chartTimeMs } = require('../submissionDuration');
 const { getConfig, isWindowOpen } = require('../config');
 const { logAccountCreated } = require('../auditLog');
+const { loginCredentialsStillValid } = require('../loginFreshness');
+const { createLabSessionService } = require('../services/labSessionService');
 const router = express.Router();
 const { customAlphabet } = require('nanoid');
 const rateLimit = require('express-rate-limit');
+
+const labSessionService = createLabSessionService(db);
 
 function generateUniqueId() { 
 	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -31,16 +36,16 @@ function getDummyHash() {
 }
 
 const registerLimiter = rateLimit(rateLimitPreset({ windowMs: 24 * 60 * 60 * 1000, max: 10 }));
-const loginLimiter = rateLimit(rateLimitPreset({ windowMs: 5 * 60 * 1000, max: 5 }));
-const csrfLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
-const leaderboardLimiter = rateLimit(rateLimitPreset({ windowMs: 10 * 1000, max: 5 }));
-const historyLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
-const labInfoLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const loginLimiter = rateLimit(rateLimitPreset({ windowMs: 5 * 60 * 1000, max: 10 }));
+const csrfLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
+const leaderboardLimiter = rateLimit(rateLimitPreset({ windowMs: 10 * 1000, max: 30 }));
+const historyLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 60 }));
+const labInfoLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
 const labStartLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 10 }));
-const downloadLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 10 }));
-const configLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
-const bootstrapLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
-const meLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const downloadLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30 }));
+const configLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
+const bootstrapLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
+const meLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
 
 function envBool(name, defaultValue = false) {
     const val = process.env[name];
@@ -137,7 +142,13 @@ router.post('/login', loginLimiter, async (req, res) => {
         }
         const user = db.prepare('SELECT * FROM users WHERE username = ?').get(userStr);
         const hashToCompare = user ? user.password : getDummyHash();
-        
+        const loginStartedAt = Date.now();
+        const credentialSnapshot = user ? {
+            passwordHashAtRead: user.password,
+            passwordChangedAtAtRead: user.password_changed_at ?? null,
+            loginStartedAt,
+        } : null;
+
         const pwd = password !== undefined && password !== null ? String(password) : "";
         if (pwd.length > 100) {
             return res.status(401).json({ error: "Invalid credentials" });
@@ -148,14 +159,30 @@ router.post('/login', loginLimiter, async (req, res) => {
             return res.status(401).json({ error: "Invalid credentials" });
         }
 
+        if (!loginCredentialsStillValid(db, user.id, credentialSnapshot)) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
+
+        const rejectStaleLogin = () => {
+            req.session.destroy(() => {
+                res.status(401).json({ error: "Invalid credentials" });
+            });
+        };
+
         req.session.regenerate(err => {
             if (err) return res.status(500).json({ error: "Login failed. Please try again." });
+            if (!loginCredentialsStillValid(db, user.id, credentialSnapshot)) {
+                return rejectStaleLogin();
+            }
             req.session.userId = user.id;
             req.session.uniqueId = user.unique_id;
-            req.session.authenticatedAt = Date.now();
+            req.session.authenticatedAt = loginStartedAt;
             req.session.csrfToken = crypto.randomBytes(32).toString('hex');
             req.session.save((saveErr) => {
                 if (saveErr) return res.status(500).json({ error: "Session save failed." });
+                if (!loginCredentialsStillValid(db, user.id, credentialSnapshot)) {
+                    return rejectStaleLogin();
+                }
                 res.json({ success: true, unique_id: user.unique_id, csrfToken: req.session.csrfToken });
             });
         });
@@ -280,19 +307,15 @@ router.get('/lab/:id', labInfoLimiter, (req, res) => {
     let timeRemaining = null;
     let sessionActive = false;
 
-    const timeLimitMinutes = getConfigNumber(lab.time_limit_minutes, 0);
+    const timeLimitMinutes = labSessionService.getTimeLimitMinutes(lab);
 
     if (activeSession) {
         sessionActive = true;
         if (timeLimitMinutes > 0) {
-            const startTime = new Date(activeSession.timestamp.replace(' ', 'T') + 'Z').getTime();
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            timeRemaining = Math.max(0, (timeLimitMinutes * 60) - elapsed);
-            
-            if (timeRemaining <= 0) {
-                const durationSeconds = elapsedSecondsSince(activeSession.timestamp);
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ?")
-                    .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), durationSeconds, activeSession.id);
+            timeRemaining = labSessionService.getTimeRemainingSeconds(activeSession.timestamp, timeLimitMinutes);
+
+            if (labSessionService.isTimeExpired(activeSession.timestamp, timeLimitMinutes)) {
+                labSessionService.closeExpiredSession(activeSession.id, activeSession.timestamp, 'Time expired.');
                 sessionActive = false;
                 timeRemaining = null;
             }
@@ -324,7 +347,7 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
         return res.status(403).json({ error: "Lab is currently closed outside of the competition window." });
     }
 
-    const timeLimitMinutes = getConfigNumber(lab.time_limit_minutes, 0);
+    const timeLimitMinutes = labSessionService.getTimeLimitMinutes(lab);
     const maxSubmissions = getConfigNumber(lab.max_submissions, 0);
 
     const startSession = db.transaction(() => {
@@ -334,14 +357,10 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
         if (existing) {
             let timeRemaining = null;
             if (timeLimitMinutes > 0) {
-                const startTime = new Date(existing.timestamp.replace(' ', 'T') + 'Z').getTime();
-                const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                timeRemaining = Math.max(0, (timeLimitMinutes * 60) - elapsed);
+                timeRemaining = labSessionService.getTimeRemainingSeconds(existing.timestamp, timeLimitMinutes);
 
-                if (timeRemaining <= 0) {
-                    const durationSeconds = elapsedSecondsSince(existing.timestamp);
-                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ?")
-                        .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), durationSeconds, existing.id);
+                if (labSessionService.isTimeExpired(existing.timestamp, timeLimitMinutes)) {
+                    labSessionService.closeExpiredSession(existing.id, existing.timestamp, 'Time expired.');
                     return { error: "Your previous session has expired.", code: 403 };
                 }
             }
@@ -361,7 +380,10 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
 
         let timeRemaining = null;
         if (timeLimitMinutes > 0) {
-            timeRemaining = timeLimitMinutes * 60;
+            const inserted = db.prepare(
+                "SELECT timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1"
+            ).get(req.session.userId, lab.id);
+            timeRemaining = labSessionService.getTimeRemainingSeconds(inserted.timestamp, timeLimitMinutes);
         }
 
         return { resumed: false, timeRemaining };
@@ -403,15 +425,10 @@ router.get('/lab/:id/download', downloadLimiter, (req, res) => {
         return res.status(403).send("Forbidden: No active lab session. Start the lab first.");
     }
 
-    const timeLimitMinutes = getConfigNumber(lab.time_limit_minutes, 0);
-    if (timeLimitMinutes > 0) {
-        const startTime = new Date(activeSession.timestamp.replace(' ', 'T') + 'Z').getTime();
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        if (elapsed > (timeLimitMinutes * 60)) {
-            db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ?")
-                .run(JSON.stringify([{message: "Time expired.", device: "N/A", possible: 0, awarded: 0, passed: false}]), elapsed, activeSession.id);
-            return res.status(403).send("Forbidden: Lab session has expired.");
-        }
+    const timeLimitMinutes = labSessionService.getTimeLimitMinutes(lab);
+    if (timeLimitMinutes > 0 && labSessionService.isTimeExpired(activeSession.timestamp, timeLimitMinutes)) {
+        labSessionService.closeExpiredSession(activeSession.id, activeSession.timestamp, 'Time expired.');
+        return res.status(403).send("Forbidden: Lab session has expired.");
     }
 
     const safeFilename = path.basename(lab.pka_file);
@@ -458,7 +475,7 @@ router.get('/leaderboard', leaderboardLimiter, (req, res) => {
     }
 
     const cfg = getConfig();
-    const { allChallenges, leaderboard: fullBoard } = buildLeaderboard(cfg);
+    const { allChallenges, leaderboard: fullBoard } = getCachedLeaderboard(() => buildLeaderboard(cfg));
     const truncated = fullBoard.length > MAX_LEADERBOARD;
     const leaderboard = truncated ? fullBoard.slice(0, MAX_LEADERBOARD) : fullBoard;
 

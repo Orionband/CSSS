@@ -1,0 +1,81 @@
+const js = require('@eslint/js');
+const prettier = require('eslint-config-prettier');
+
+module.exports = [
+    {
+        ignores: [
+            'node_modules/**',
+            'captures/**',
+            '.code-review-graph/**',
+            'grader.db*',
+            'public/js/chart.min.js',
+        ],
+    },
+    js.configs.recommended,
+    prettier,
+    {
+        files: ['src/**/*.js', 'testing/**/*.js', 'scripts/**/*.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'commonjs',
+            globals: {
+                process: 'readonly',
+                __dirname: 'readonly',
+                __filename: 'readonly',
+                module: 'readonly',
+                require: 'readonly',
+                exports: 'readonly',
+                Buffer: 'readonly',
+                setInterval: 'readonly',
+                clearInterval: 'readonly',
+                setTimeout: 'readonly',
+                clearTimeout: 'readonly',
+                console: 'readonly',
+                global: 'readonly',
+            },
+        },
+        rules: {
+            'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
+            'no-empty': ['error', { allowEmptyCatch: true }],
+            'no-control-regex': 'off',
+            'no-misleading-character-class': 'off',
+            'no-redeclare': 'off',
+        },
+    },
+    {
+        files: ['public/js/**/*.js'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: {
+                window: 'readonly',
+                document: 'readonly',
+                location: 'readonly',
+                fetch: 'readonly',
+                FormData: 'readonly',
+                console: 'readonly',
+                setTimeout: 'readonly',
+                clearTimeout: 'readonly',
+                setInterval: 'readonly',
+                clearInterval: 'readonly',
+                Chart: 'readonly',
+                io: 'readonly',
+                URLSearchParams: 'readonly',
+                sessionStorage: 'readonly',
+                localStorage: 'readonly',
+                crypto: 'readonly',
+                Audio: 'readonly',
+                Notification: 'readonly',
+                FileReader: 'readonly',
+                indexedDB: 'readonly',
+                CustomEvent: 'readonly',
+                Event: 'readonly',
+                HTMLElement: 'readonly',
+                getComputedStyle: 'readonly',
+            },
+        },
+        rules: {
+            'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+        },
+    },
+];

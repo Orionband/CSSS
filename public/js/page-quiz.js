@@ -1,3 +1,4 @@
+import { showNetworkError } from './utils.js';
 import { state } from './state.js';
 import { initShell } from './shell.js';
 import { loadQuiz, submitQuiz, initQuizProtection } from './quiz.js';
@@ -16,7 +17,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.currentChallengeId = id;
     state.currentChallengeType = 'quiz';
 
-    document.getElementById('btn-submit-quiz')?.addEventListener('click', submitQuiz);
+    document.getElementById('btn-submit-quiz')?.addEventListener('click', () => {
+        submitQuiz().catch((err) => showNetworkError(err, { title: 'Submit Failed' }));
+    });
 
     await loadQuiz(id);
 });

@@ -4,8 +4,7 @@ security/
 protected/images/
 protected/pka/
 grader.db
-audit.log
-audit.log.1
+logs/
 lab.conf
 quiz.conf
 combined.txt
@@ -19,5 +18,12 @@ TRIAGE.json
 TRIAGE.md
 .triage-state/
 .cursor/
+.claude/
+.codex/
 CLAUDE.md
-testing/
+graphify-out/
+.code-review-graph/
+.github/code-review-graph.instruction.md
+.eslintcache
+npm-debug.log*
+testing/.perf-last.json

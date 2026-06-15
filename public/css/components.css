@@ -122,6 +122,32 @@ button:active, button:focus { outline: none; }
 }
 .modal-close:hover { color: var(--accent); }
 
+#dialog-container {
+    z-index: 1001;
+}
+.modal-content.dialog {
+    width: min(440px, 100%);
+}
+.dialog-title {
+    margin: 0 0 12px;
+    font-size: 1.1rem;
+    padding-right: 24px;
+}
+.dialog-message {
+    margin: 0 0 10px;
+    line-height: 1.5;
+    color: var(--text);
+}
+.dialog-message:last-of-type {
+    margin-bottom: 20px;
+}
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+}
+
 .type-badge {
     display: inline-block;
     font-size: 0.65rem;
@@ -171,6 +197,27 @@ tr:last-child td { border-bottom: none; }
 .badge-owner { background: #e6b800; color: #000; }
 .table-scroll-400 { max-height: 400px; }
 .error-center { color: var(--accent); text-align: center; }
+.network-offline-banner {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    padding: 10px 16px;
+    text-align: center;
+    background: #5a1a1a;
+    color: #fff;
+    font-size: 0.9rem;
+}
+.bootstrap-failure-banner {
+    margin: 16px 0;
+    padding: 16px;
+    text-align: center;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+}
+.bootstrap-failure-banner p {
+    margin: 0 0 12px;
+    color: var(--accent);
+}
 .score-display-mb { margin-bottom: 20px; }
 .inline-block-my { display: inline-block; margin: 10px 0; }
 .adj-positive { color: #4CAF50; }

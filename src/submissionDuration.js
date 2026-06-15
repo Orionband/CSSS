@@ -1,5 +1,12 @@
 function parseDbTimestamp(dbTimestamp) {
-    return new Date(String(dbTimestamp).replace(' ', 'T') + 'Z').getTime();
+    if (dbTimestamp == null) return NaN;
+    const raw = String(dbTimestamp).trim();
+    if (!raw) return NaN;
+    if (raw.includes('T')) {
+        const iso = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
+        return new Date(iso).getTime();
+    }
+    return new Date(raw.replace(' ', 'T') + 'Z').getTime();
 }
 
 function elapsedSecondsSince(dbTimestamp) {

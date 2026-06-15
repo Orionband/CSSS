@@ -23,6 +23,7 @@ function labTimerTick() {
         clearLabTimerInterval();
         timerDiv.innerText = "TIME'S UP";
         timerDiv.style.color = '#f44747';
+        state.labTimerExpired = true;
         state.labTimerOnExpire?.();
     }
 }
@@ -31,6 +32,7 @@ export function startLabTimer(timeRemainingSeconds, onExpire) {
     clearLabTimerInterval();
     state.labTimerFrozen = false;
     state.labTimerFrozenAt = null;
+    state.labTimerExpired = false;
     state.labTimerOnExpire = onExpire ?? null;
 
     const timerDiv = document.getElementById('lab-timer');

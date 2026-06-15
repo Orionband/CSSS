@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const AUDIT_LOG_PATH = path.join(__dirname, '..', 'audit.log');
+const AUDIT_LOG_DIR = path.join(__dirname, '..', 'logs');
+const AUDIT_LOG_PATH = path.join(AUDIT_LOG_DIR, 'audit.log');
 const MAX_DETAIL_LEN = 500;
 const MAX_ERROR_DETAIL_LEN = 8000;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -54,9 +55,8 @@ function sanitizeDetail(raw, { maxLen = MAX_DETAIL_LEN } = {}) {
 }
 
 function ensureAuditFile() {
-    const dir = path.dirname(AUDIT_LOG_PATH);
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(AUDIT_LOG_DIR)) {
+        fs.mkdirSync(AUDIT_LOG_DIR, { recursive: true });
     }
     if (!fs.existsSync(AUDIT_LOG_PATH)) {
         fs.writeFileSync(AUDIT_LOG_PATH, '', { mode: 0o600 });

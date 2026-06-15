@@ -8,15 +8,10 @@ const { parseXmlForGrading } = require('./xmlLimits');
 const { ensureArray } = require('../limits');
 
 function stripDoctypeCompletely(xml) {
-    let result = xml;
-    const doctypeRe = /<!DOCTYPE(?:[^[\]"']|"[^"]*"|'[^']*'|\[[\s\S]*?\])*?>/gi;
-    let prev;
-    do {
-        prev = result;
-        result = result.replace(doctypeRe, '');
-    } while (result !== prev);
-    result = result.replace(/<!ENTITY\s+[^>]*>/gi, '');
-    return result;
+    if (/<!DOCTYPE/i.test(xml)) {
+        throw new Error('Invalid XML');
+    }
+    return xml.replace(/<!ENTITY\s+[^>]*>/gi, '');
 }
 
 function sanitizeErrorMessage(rawMessage) {
@@ -253,4 +248,4 @@ async function runGrade(job, emit) {
     return result;
 }
 
-module.exports = { runGrade, sanitizeErrorMessage };
+module.exports = { runGrade, sanitizeErrorMessage, stripDoctypeCompletely };
