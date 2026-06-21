@@ -37,6 +37,11 @@
             else navBrand.textContent = full || main;
             navBrand.classList.add('is-branded');
         }
+
+        if (options.homepage_enabled !== undefined) {
+            const brand = document.getElementById('nav-brand');
+            if (brand) brand.href = options.homepage_enabled ? '/' : '/challenges';
+        }
     }
 
     window.csssApplyBranding = applyBranding;
@@ -49,6 +54,5 @@
             applyBranding(parsed.data.options);
         }
     } catch {
-        /* ignore cache parse errors */
     }
 })();

@@ -22,6 +22,7 @@ describe('buildEntryForUser', () => {
             scoreMap,
             durationMap,
         );
+        assert.equal(entry.raw_score, 50);
         assert.equal(entry.total_score, 50);
         assert.equal(entry.scores.lab1, 50);
         assert.equal(entry.scores.quiz1, '?');
@@ -37,6 +38,7 @@ describe('buildEntryForUser', () => {
             { 1: { lab1: 40 } },
             {},
         );
+        assert.equal(entry.raw_score, 40);
         assert.equal(entry.total_score, 50);
         assert.equal(entry.score_adjustment, 10);
     });
@@ -50,6 +52,7 @@ describe('buildEntryForUser', () => {
             { 1: { lab1: 30 } },
             {},
         );
+        assert.equal(entry.raw_score, 30);
         assert.equal(entry.total_score, 'W');
         assert.equal(entry.scores.lab1, 'W');
     });

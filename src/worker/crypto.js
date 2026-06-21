@@ -29,7 +29,6 @@ function expandKey(keyBytes) {
     return sessionKey;
 }
 
-/** One Twofish block (16 B in -> 16 B out) for CMAC / CTR counter mode. */
 function runTwofishBlock(expandedKey, input16, output16) {
     const inArr = input16 instanceof Uint8Array
         ? input16

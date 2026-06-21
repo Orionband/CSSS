@@ -45,7 +45,7 @@
                     <div class="admin-toolbar">
                         <label class="audit-filter-label admin-toolbar-search">
                             Search:
-                            <input type="search" class="field-input audit-filter-input admin-user-search" placeholder="Username" autocomplete="off" spellcheck="false">
+                            <input type="search" class="field-input audit-filter-input admin-users-search" placeholder="Username" autocomplete="off" spellcheck="false">
                         </label>
                         <button class="btn-secondary btn-small" id="btn-admin-new-user">+ Create New User</button>
                     </div>
@@ -53,15 +53,16 @@
                         <table class="admin-table" id="admin-users-table">
                             <thead>
                                 <tr>
-                                    <th>ID</th>
-                                    <th>Username</th>
-                                    <th>Subs</th>
+                                    <th class="sortable" data-sort="id" aria-sort="ascending">ID</th>
+                                    <th class="sortable" data-sort="username" aria-sort="none">Username</th>
+                                    <th class="sortable" data-sort="submissions" aria-sort="none">Submissions</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="admin-users-body"></tbody>
                         </table>
                     </div>
+                    <nav class="admin-pagination" id="admin-users-pagination" aria-label="Users pages"></nav>
                 </div>
 
                 <div id="admin-panel-analytics" class="admin-panel-content hidden">
@@ -125,24 +126,25 @@
                     <div class="admin-toolbar">
                         <label class="audit-filter-label admin-toolbar-search">
                             Search:
-                            <input type="search" class="field-input audit-filter-input admin-user-search" placeholder="Username" autocomplete="off" spellcheck="false">
+                            <input type="search" class="field-input audit-filter-input admin-lb-search" placeholder="Username" autocomplete="off" spellcheck="false">
                         </label>
                     </div>
                     <div class="table-wrapper">
                         <table class="admin-table" id="admin-lb-table">
                             <thead>
                                 <tr>
-                                    <th>Username</th>
-                                    <th>Raw LB Score</th>
-                                    <th>Global Mod (+/-)</th>
-                                    <th>Total Score</th>
-                                    <th>Withheld?</th>
+                                    <th class="sortable" data-sort="username" aria-sort="ascending">Username</th>
+                                    <th class="sortable" data-sort="raw" aria-sort="none">Raw LB Score</th>
+                                    <th class="sortable" data-sort="adjustment" aria-sort="none">Global Mod (+/-)</th>
+                                    <th class="sortable" data-sort="total" aria-sort="none">Total Score</th>
+                                    <th class="sortable" data-sort="withheld" aria-sort="none">Withheld?</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="admin-lb-body"></tbody>
                         </table>
                     </div>
+                    <nav class="admin-pagination" id="admin-lb-pagination" aria-label="Leaderboard pages"></nav>
                 </div>
             </div>
         </div>

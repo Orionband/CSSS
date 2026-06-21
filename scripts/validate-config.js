@@ -1,45 +1,30 @@
 #!/usr/bin/env node
-const fs = require('fs');
 const path = require('path');
-const toml = require('toml');
-const { validateConfig } = require('../src/config/validate');
+const { loadConfigFromDisk } = require('../src/config');
 
-const projectRoot = path.resolve(__dirname, '..');
-
-function loadToml(filePath) {
-    if (!fs.existsSync(filePath)) return {};
-    let raw = fs.readFileSync(filePath, 'utf-8');
-    if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
-    return toml.parse(raw);
-}
+const rootArg = process.argv.indexOf('--project-root');
+const projectRoot = rootArg !== -1
+    ? path.resolve(process.argv[rootArg + 1])
+    : path.resolve(__dirname, '..');
 
 function main() {
-    let config = { labs: [], quizzes: [] };
-
+    let loaded;
     try {
-        const labPath = path.join(projectRoot, 'lab.conf');
-        const quizPath = path.join(projectRoot, 'quiz.conf');
-        if (fs.existsSync(labPath)) {
-            const parsedLab = loadToml(labPath);
-            config.labs = parsedLab.labs || [];
-        }
-        if (fs.existsSync(quizPath)) {
-            const parsedQuiz = loadToml(quizPath);
-            config.quizzes = parsedQuiz.quizzes || [];
-        }
+        loaded = loadConfigFromDisk({ projectRoot });
     } catch (e) {
         console.error('TOML parse error:', e.message);
         process.exit(1);
     }
 
-    const result = validateConfig(config, { projectRoot });
-    if (!result.ok) {
+    if (!loaded.validation.ok) {
         console.error('Config validation failed:');
-        result.errors.forEach((err) => console.error(`  - ${err}`));
+        loaded.validation.errors.forEach((err) => console.error(`  - ${err}`));
         process.exit(1);
     }
 
-    console.log(`Config OK: ${config.labs.length} lab(s), ${config.quizzes.length} quiz(zes).`);
+    const { labs, quizzes, homepage } = loaded.config;
+    const homepageNote = homepage?.enabled === true ? ', homepage enabled' : '';
+    console.log(`Config OK: ${labs.length} lab(s), ${quizzes.length} quiz(zes)${homepageNote}.`);
 }
 
 main();

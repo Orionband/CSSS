@@ -9,6 +9,9 @@ const CHECK_TYPES = new Set([
 ]);
 const QUIZ_TYPES = new Set(['radio', 'checkbox', 'text', 'matching']);
 const SOCKET_MAX_UPLOAD_MB = 50;
+const MAX_HOMEPAGE_BODY = 8000;
+const MAX_HOMEPAGE_TITLE = 200;
+const LOGO_PATH_PATTERN = /^\/[a-zA-Z0-9._/-]+$/;
 
 function parseDateMs(value) {
     if (!value) return null;
@@ -207,6 +210,50 @@ function validateQuiz(quiz, index, errors) {
     }
 }
 
+function validateHomepageFieldLength(value, field, errors) {
+    if (typeof value === 'string' && value.length > MAX_HOMEPAGE_TITLE) {
+        errors.push(`homepage: ${field} exceeds ${MAX_HOMEPAGE_TITLE} characters`);
+    }
+}
+
+function validateHomepageBlock(block, blockName, errors) {
+    if (!block) return;
+    validateHomepageFieldLength(block.title, `${blockName}.title`, errors);
+    if (typeof block.body === 'string' && block.body.length > MAX_HOMEPAGE_BODY) {
+        errors.push(`homepage: ${blockName}.body exceeds ${MAX_HOMEPAGE_BODY} characters`);
+    }
+}
+
+function validateHomepage(homepage, projectRoot, errors, options) {
+    if (!homepage) return;
+
+    validateHomepageFieldLength(homepage.page_title, 'page_title', errors);
+    validateHomepageFieldLength(homepage.subtitle, 'subtitle', errors);
+    validateHomepageFieldLength(homepage.period_label, 'period_label', errors);
+
+    const logo = homepage.logo || '/logo.png';
+    if (!LOGO_PATH_PATTERN.test(logo) || logo.includes('..')) {
+        errors.push(`homepage: invalid logo path "${logo}"`);
+    } else if (!options.skipAssetChecks) {
+        const logoPath = path.resolve(projectRoot, 'public', logo.replace(/^\//, ''));
+        if (!fs.existsSync(logoPath)) {
+            errors.push(`homepage: logo file not found: ${logo}`);
+        }
+    }
+
+    const startMs = parseDateMs(homepage.comp_start);
+    const endMs = parseDateMs(homepage.comp_end);
+    if (homepage.comp_start && startMs === null) errors.push('homepage: invalid comp_start');
+    if (homepage.comp_end && endMs === null) errors.push('homepage: invalid comp_end');
+    if (startMs !== null && endMs !== null && startMs >= endMs) {
+        errors.push('homepage: comp_start must be before comp_end');
+    }
+
+    validateHomepageBlock(homepage.rules, 'rules', errors);
+    validateHomepageBlock(homepage.prizes, 'prizes', errors);
+    validateHomepageBlock(homepage.readme, 'readme', errors);
+}
+
 function validateConfig(config, options = {}) {
     const projectRoot = options.projectRoot || path.resolve(__dirname, '../..');
     const errors = [];
@@ -230,6 +277,10 @@ function validateConfig(config, options = {}) {
         }
         validateQuiz(quiz, i, errors);
     });
+
+    if (config.homepage) {
+        validateHomepage(config.homepage, projectRoot, errors, options);
+    }
 
     return { ok: errors.length === 0, errors };
 }

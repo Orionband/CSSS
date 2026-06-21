@@ -224,7 +224,6 @@ function parseAuditLine(line) {
             return parsed;
         }
     } catch (e) {
-        /* skip corrupt lines */
     }
     return null;
 }

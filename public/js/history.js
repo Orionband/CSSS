@@ -1,4 +1,3 @@
-import { state } from './state.js';
 import { escapeHtml, showAlert, apiFetch, NETWORK_ERROR_MESSAGE, isNetworkError } from './utils.js';
 import { renderLabResults } from './lab.js';
 import { consumePrefetch } from './prefetch.js';
@@ -20,8 +19,7 @@ function renderHistoryRow(sub, list) {
     const date = new Date(sub.timestamp).toLocaleString();
     item.addEventListener('click', () => showHistoryDetail(sub));
 
-    const challenge = state.availableChallenges.find(c => c.id === sub.lab_id);
-    const title = challenge ? challenge.title : sub.lab_id;
+    const title = sub.title || sub.lab_id;
     const scoreText = sub.score !== null ? `${sub.score} / ${sub.max_score}` : 'Hidden';
     const timeText = formatDuration(sub.duration_seconds);
     const typeLabel = sub.type === 'quiz'
@@ -104,8 +102,7 @@ function showHistoryDetail(sub) {
     document.getElementById('history-detail').classList.remove('hidden');
     document.getElementById('hist-date').innerText = new Date(sub.timestamp).toLocaleString();
 
-    const challenge = state.availableChallenges.find(c => c.id === sub.lab_id);
-    document.getElementById('hist-lab').innerText = challenge ? challenge.title : sub.lab_id;
+    document.getElementById('hist-lab').innerText = sub.title || sub.lab_id;
     const timeLabel = formatDuration(sub.duration_seconds);
     const scoreLine = sub.score !== null ? `${sub.score} / ${sub.max_score}` : 'Hidden';
     document.getElementById('hist-score').innerText = timeLabel ? `${scoreLine} (${timeLabel})` : scoreLine;

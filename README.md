@@ -14,7 +14,7 @@
 
 ## Fonts
 
-The UI uses self-hosted **Roboto Mono** (weights 400 and 700) in [`public/fonts/`](public/fonts/). License: Apache 2.0 — see [`public/fonts/LICENSE.txt`](public/fonts/LICENSE.txt).
+The UI uses self-hosted **Roboto Mono** (weights 400 and 700) in [`public/fonts/`](public/fonts/). License: Apache 2.0. See [`public/fonts/LICENSE.txt`](public/fonts/LICENSE.txt). This was an attempt to make it faster.
 
 ## Running the Server
 1.  `npm install`
@@ -30,7 +30,7 @@ npm run validate-config
 
 ### Config validation
 
-The server **loads** `lab.conf` and `quiz.conf` even when validation finds problems; it prints warnings to the console and continues starting. Use `npm run validate-config` for a **strict** check (exit code 1 on failure) in CI or before deploy.
+The server loads `lab.conf`, `quiz.conf`, and `homepage.conf` (when present) even when validation finds problems; it prints warnings to the console and continues starting. Use `npm run validate-config` for a strict check (exit code 1 on failure) in CI or before deploy.
 
 Set `CSSS_SKIP_ASSET_VALIDATION=true` in `.env` to skip missing `pka_file` checks during local dev or tests.
 
@@ -42,8 +42,9 @@ Set `CSSS_SKIP_ASSET_VALIDATION=true` in `.env` to skip missing `pka_file` check
 | PKA assets | `pka_file` must exist under the project root unless asset checks are skipped |
 | Lab checks | Each check needs `device`, `points`, and at least one `pass` or `passoverride` block; type must be a known check type; regex patterns must compile (RE2) |
 | Quizzes | Question `type` must be `radio`, `checkbox`, `text`, or `matching`; radio questions need exactly one correct answer; checkbox needs at least one; text questions need `regex`; matching questions need non-empty `pairs` |
+| Homepage | `logo` must be a safe path under `public/` (e.g. `/logo.png`); `comp_start` / `comp_end` must be valid ISO datetimes with start before end; titles ≤ 200 chars; block bodies ≤ 8000 chars |
 
-This checks duplicate IDs, time windows, check shapes, regex compilation, and that `pka_file` paths exist. If PKA files are not on disk yet (local dev), set `CSSS_SKIP_ASSET_VALIDATION=true` in `.env` or place assets under `protected/pka/` and reference them correctly in `lab.conf`.
+This checks duplicate IDs, time windows, check shapes, regex compilation, homepage fields, and that `pka_file` / logo paths exist. If PKA files are not on disk yet (local dev), set `CSSS_SKIP_ASSET_VALIDATION=true` in `.env` or place assets under `protected/pka/` and reference them correctly in `lab.conf`.
 
 ---
 
@@ -53,7 +54,7 @@ This checks duplicate IDs, time windows, check shapes, regex compilation, and th
 npm test              # unit + integration tests
 npm run test:perf     # PKA decrypt performance (slow; optional)
 npm run check           # eslint + tests
-npm run validate-config # validate lab.conf / quiz.conf
+npm run validate-config # validate lab.conf / quiz.conf / homepage.conf
 ```
 
 Tests run against **isolated temp SQLite databases** (not `grader.db`) with a **mock grader pool** — no worker threads are started. The harness sets `NODE_ENV=test` and `CSSS_SKIP_ASSET_VALIDATION=true` automatically.
@@ -67,6 +68,7 @@ Each suite tears down HTTP/Socket.IO servers, closes temp and singleton database
 ---
 
 ## Directory Structure
+- Config files live in `configs/` (`lab.conf`, `quiz.conf`, optional `homepage.conf`).
 - Assets for quizes and labs should be placed inside the ``protected/`` directory.
 - ``captures/`` contains retained xml/pka/pkt files
 
@@ -327,6 +329,107 @@ explanation = ""
     left = "noobfooditem"
     right = "Cisco"
 ```
+
+---
+
+## 3. Landing Page (`homepage.conf`)
+
+Optional TOML file at `configs/homepage.conf`. When `enabled = true`, CSSS serves a public landing page at `/` instead of the login form. Login moves to `/login`; the nav brand link points to `/` instead of `/challenges`.
+
+If the file is missing, or `enabled` is `false`, behavior is unchanged: `/` shows login and `/login` redirects to `/`.
+
+### How to create it
+
+1. Create the configs directory if it does not exist: `configs/` (this folder is gitignored; each deployment keeps its own copy).
+2. Add a logo image under `public/` (default path is `public/logo.png`).
+3. Create `configs/homepage.conf` with `enabled = true` and the fields below.
+4. Validate: `npm run validate-config` (should print `homepage enabled` when active).
+5. Restart the server (or rely on config reload if you use that workflow).
+
+Minimal example:
+
+```toml
+[homepage]
+enabled = true
+page_title = "Spring Networking Event"
+```
+
+Full example:
+
+```toml
+[homepage]
+enabled = true
+page_title = "Spring Networking Event"
+subtitle = "Packet Tracer labs and quizzes — good luck!"
+logo = "/logo.png"
+comp_start = "2026-04-02T10:00:00Z"
+comp_end = "2026-04-03T12:00:00Z"
+period_label = "April 2–3, 2026 (UTC)"
+
+[homepage.readme]
+title = "About"
+body = """
+Welcome to the event landing page.
+Use the Login link to sign in and open Challenges when you are ready.
+"""
+
+[homepage.rules]
+title = "Rules"
+body = "No sharing answers. One account per person."
+
+[homepage.prizes]
+title = "Prizes"
+body = "Top three on the leaderboard win swag."
+```
+
+### Settings
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `enabled` | Yes (to activate) | Must be `true` for the landing page. Any other value, or a missing file, keeps login at `/`. |
+| `page_title` | No | Main heading on the page and part of the browser tab title. |
+| `subtitle` | No | Subheading under the title. |
+| `logo` | No | URL path to an image in `public/` (default: `/logo.png`). Must start with `/` and must not contain `..`. |
+| `comp_start` | No | Competition window start (UTC ISO 8601, e.g. `2026-04-02T10:00:00Z`). |
+| `comp_end` | No | Competition window end (same format). If both are set, `comp_start` must be before `comp_end`. |
+| `period_label` | No | Custom text for the date row. When set, it is shown instead of the raw `comp_start` / `comp_end` values. |
+
+### Text blocks (`readme`, `rules`, `prizes`)
+
+Each block is an optional `[homepage.<name>]` table:
+
+- `title` — section heading (defaults: `README`, `Rules`, `Prizes`).
+- `body` — plain text shown in a `<pre>` block (whitespace preserved). Use TOML multiline strings (`""" ... """`) for paragraphs.
+
+A section is hidden when `body` is empty or omitted. Block titles are limited to 200 characters; bodies to 8000 characters.
+
+### Competition status badge
+
+When `comp_start` and/or `comp_end` are valid, the landing page shows a badge:
+
+- **Upcoming** — before `comp_start`
+- **Live** — inside the window
+- **Ended** — after `comp_end`
+
+Invalid dates do not fail the server; the badge is simply omitted.
+
+### Behavior when enabled
+
+| Route / UI | Homepage off | Homepage on |
+|------------|--------------|-------------|
+| `/` | Login form | Landing page (`home.html`) |
+| `/login` | Redirects to `/` | Login form |
+| Nav brand link | `/challenges` | `/` |
+| `/api/config` | No `homepage` field | Includes `homepage` payload and `options.homepage_enabled: true` |
+
+The landing page is public (no login required). Challenge list and grading still require authentication.
+
+### Disabling
+
+Delete `configs/homepage.conf`, or set `enabled = false`, then restart. `/` returns to the login page.
+
+---
+
 ## Free Servers & Configuration Builder
 *   You can deploy CSSS to [Koyeb](https://www.koyeb.com/) or use something like ngrok
 *   Use [cron-job.org](https://console.cron-job.org/login) to ping the server every 10 minutes to prevent sleeping.

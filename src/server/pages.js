@@ -1,8 +1,12 @@
 const path = require("path");
 
+const fs = require("fs");
+
 const express = require("express");
 
-const LEGACY_HTML_REDIRECTS = {
+const { isHomepageEnabled } = require("../config");
+
+const LEGACY_HTML_REDIRECTS_BASE = {
   "index.html": "/",
 
   "challenges.html": "/challenges",
@@ -20,7 +24,7 @@ const LEGACY_HTML_REDIRECTS = {
   "admin.html": "/admin",
 };
 
-const PAGE_SHELL_FILES = new Set(Object.keys(LEGACY_HTML_REDIRECTS));
+const PAGE_SHELL_FILES = new Set(Object.keys(LEGACY_HTML_REDIRECTS_BASE));
 
 function safeDecodePath(rawPath) {
   try {
@@ -38,7 +42,51 @@ function legacyHtmlFilename(reqPath) {
   return match ? match[1].toLowerCase() : null;
 }
 
-function mountPages(app, db, publicDir) {
+function getLegacyRedirects(getConfig) {
+  const redirects = { ...LEGACY_HTML_REDIRECTS_BASE };
+  if (isHomepageEnabled(getConfig())) {
+    redirects["index.html"] = "/login";
+    redirects["home.html"] = "/";
+  }
+  return redirects;
+}
+
+function loginRedirectPath(getConfig) {
+  return isHomepageEnabled(getConfig()) ? "/login" : "/";
+}
+
+const NAV_BRAND_RE =
+  /<a href="[^"]*" class="nav-brand navElement" id="nav-brand"><\/a>/;
+
+function navBrandHref(getConfig) {
+  return isHomepageEnabled(getConfig()) ? "/" : "/challenges";
+}
+
+function patchNavBrandHref(html, getConfig) {
+  if (!NAV_BRAND_RE.test(html)) return html;
+  const href = navBrandHref(getConfig);
+  return html.replace(
+    NAV_BRAND_RE,
+    `<a href="${href}" class="nav-brand navElement" id="nav-brand"></a>`,
+  );
+}
+
+function getPageHtml(publicDir, filename, getConfig, cache) {
+  const cacheKey = `${filename}:${navBrandHref(getConfig)}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+  const filePath = path.join(publicDir, filename);
+  const html = patchNavBrandHref(
+    fs.readFileSync(filePath, "utf8"),
+    getConfig,
+  );
+  cache.set(cacheKey, html);
+  return html;
+}
+
+function mountPages(app, db, publicDir, getConfig) {
+  const pageHtmlCache = new Map();
+
   const sendPage = (filename) => (req, res) => {
     if (req.session?.userId) {
       res.setHeader(
@@ -51,10 +99,19 @@ function mountPages(app, db, publicDir) {
       res.setHeader("Expires", "0");
     }
 
-    res.sendFile(path.join(publicDir, filename));
+    res.type("html").send(getPageHtml(publicDir, filename, getConfig, pageHtmlCache));
   };
 
-  app.get("/", sendPage("index.html"));
+  const homepageOn = () => isHomepageEnabled(getConfig());
+
+  app.get("/", (req, res) => {
+    sendPage(homepageOn() ? "home.html" : "index.html")(req, res);
+  });
+
+  app.get("/login", (req, res) => {
+    if (!homepageOn()) return res.redirect(302, "/");
+    sendPage("index.html")(req, res);
+  });
 
   app.get("/challenges", sendPage("challenges.html"));
 
@@ -69,8 +126,10 @@ function mountPages(app, db, publicDir) {
   app.get("/quiz", sendPage("quiz.html"));
 
   app.get("/admin", (req, res) => {
+    const authRedirect = loginRedirectPath(getConfig);
+
     if (!req.session?.userId) {
-      return res.redirect("/");
+      return res.redirect(authRedirect);
     }
 
     const user = db
@@ -82,7 +141,7 @@ function mountPages(app, db, publicDir) {
         res.clearCookie("connect.sid");
       });
 
-      return res.redirect("/");
+      return res.redirect(authRedirect);
     }
 
     if (
@@ -94,7 +153,7 @@ function mountPages(app, db, publicDir) {
         res.clearCookie("connect.sid");
       });
 
-      return res.redirect("/");
+      return res.redirect(authRedirect);
     }
 
     if (user.is_admin !== 1) {
@@ -110,7 +169,9 @@ function mountPages(app, db, publicDir) {
 
     res.setHeader("Expires", "0");
 
-    res.sendFile(path.join(publicDir, "admin.html"));
+    res
+      .type("html")
+      .send(getPageHtml(publicDir, "admin.html", getConfig, pageHtmlCache));
   });
 
   app.use((req, res, next) => {
@@ -120,7 +181,7 @@ function mountPages(app, db, publicDir) {
 
     if (!filename) return next();
 
-    const target = LEGACY_HTML_REDIRECTS[filename];
+    const target = getLegacyRedirects(getConfig)[filename];
 
     if (!target) return next();
 
@@ -136,7 +197,10 @@ function mountPages(app, db, publicDir) {
 
     const base = path.basename(safeDecodePath(req.path)).toLowerCase();
 
-    if (PAGE_SHELL_FILES.has(base)) return res.status(404).end();
+    const shellFiles = new Set(PAGE_SHELL_FILES);
+    if (homepageOn()) shellFiles.add("home.html");
+
+    if (shellFiles.has(base)) return res.status(404).end();
 
     next();
   });

@@ -52,7 +52,6 @@ describe('answer-key grading integration', () => {
             const chiSw = breakdown.find((row) => row.device === 'PIX-CHI-SW1' && /access vlan 20/i.test(row.message));
             if (chiSw) assert.ok(chiSw.passed, 'PIX-CHI-SW1 dual-pass check should pass on answer-key PKA');
         } else {
-            // Intended: default test.pka is an unconfigured starter file, not the answer key.
             t.diagnostic('starter test.pka (expected): pipeline OK, positive checks fail, penalty may apply');
             assert.ok(breakdown.length > 0);
             assert.ok(penaltyChecks(labConfig).length > 0);

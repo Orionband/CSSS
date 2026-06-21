@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { customAlphabet } = require('nanoid');
 const { sanitizeUsername, sanitizeEmail } = require('./src/sanitizeUserFields');
 const { validatePasswordPolicy } = require('./src/passwordPolicy');
-const { logAccountCreated, logPasswordChanged } = require('./src/auditLog');
+const { logAccountCreated, logPasswordChanged, logAdminChange, logOwnerGranted } = require('./src/auditLog');
 
 function generateUniqueId() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -26,9 +26,7 @@ if (!fs.existsSync(dbPath)) {
 const db = require('./src/database');
 console.log('Opened grader.db');
 
-// Backups have been disabled per instructions
 function backupDb() {
-  // No-op: Database backups are disabled.
 }
 
 function invalidateUserSessions(userId) {
@@ -61,7 +59,6 @@ function prettyPrintRows(rows) {
       try {
         out.details = JSON.stringify(JSON.parse(out.details), null, 2);
       } catch {
-        // leave as-is if not JSON
       }
     }
     return out;
@@ -78,7 +75,6 @@ async function viewSubmissions() {
   prettyPrintRows(rows);
 }
 
-// find user by numeric id or by username (returns full row including id)
 function findUserByIdOrUsername(key) {
   if (!key) return null;
   if (/^\d+$/.test(key)) {
@@ -94,7 +90,6 @@ function isValidIdentifier(name) {
   return /^[A-Za-z0-9_]+$/.test(name);
 }
 
-// return array of { table, from, to, on_update, on_delete }
 function getReferencingForeignKeys() {
   const tables = listTables();
   const refs = [];
@@ -114,7 +109,6 @@ function getReferencingForeignKeys() {
         }
       }
     } catch (e) {
-      // ignore tables that fail
     }
   }
   return refs;
@@ -400,6 +394,87 @@ async function createUser() {
     }
 }
 
+async function promoteUser() {
+  const key = await ask('Enter user id or username to promote: ');
+  const user = findUserByIdOrUsername(key);
+  if (!user) {
+    console.log('User not found.');
+    return;
+  }
+
+  console.log('User found:');
+  console.table([ { ...user, password: '***bcrypt***' } ]);
+
+  console.log('\nChoose role:');
+  console.log('1) Admin');
+  console.log('2) Owner (includes admin privileges)');
+  console.log('3) Abort');
+
+  const roleChoice = await ask('Choose 1/2/3: ');
+  if (!['1', '2'].includes(roleChoice)) {
+    console.log('Aborted.');
+    return;
+  }
+
+  const promoteToOwner = roleChoice === '2';
+
+  if (promoteToOwner && user.is_owner === 1) {
+    console.log('User is already an owner.');
+    return;
+  }
+  if (!promoteToOwner && user.is_admin === 1) {
+    console.log(user.is_owner === 1
+      ? 'User is already an owner (includes admin privileges).'
+      : 'User is already an admin.');
+    return;
+  }
+
+  const roleLabel = promoteToOwner ? 'OWNER' : 'ADMIN';
+  const confirm = await ask(`Type PROMOTE to grant ${roleLabel} to ${user.username} (id=${user.id}): `);
+  if (confirm !== 'PROMOTE') {
+    console.log('Aborted.');
+    return;
+  }
+
+  backupDb();
+  try {
+    if (promoteToOwner) {
+      db.prepare('UPDATE users SET is_admin = 1, is_owner = 1 WHERE id = ?').run(user.id);
+      if (user.is_owner !== 1) {
+        logOwnerGranted({
+          actorUserId: null,
+          targetUserId: user.id,
+          username: user.username,
+          source: 'cli',
+        });
+      }
+      if (user.is_admin !== 1) {
+        logAdminChange({
+          granted: true,
+          actorUserId: null,
+          targetUserId: user.id,
+          username: user.username,
+          source: 'cli',
+        });
+      }
+      console.log(`User ${user.username} promoted to owner.`);
+    } else {
+      db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id);
+      logAdminChange({
+        granted: true,
+        actorUserId: null,
+        targetUserId: user.id,
+        username: user.username,
+        source: 'cli',
+      });
+      console.log(`User ${user.username} promoted to admin.`);
+    }
+    invalidateUserSessions(user.id);
+  } catch (err) {
+    console.error('Error promoting user:', err.message);
+  }
+}
+
 async function deleteSpecificSubmission() {
     const subId = await ask('Enter Submission ID to delete: ');
     if (!subId || isNaN(subId)) return console.log("Aborted: Invalid ID.");
@@ -434,9 +509,10 @@ async function mainMenu() {
     console.log('7) Delete specific submission by ID');
     console.log('8) Run plain SQL');
     console.log('9) List tables');
+    console.log('10) Promote user to admin or owner');
     console.log('0) Exit');
 
-    const choice = await ask('Choose (0-9): ');
+    const choice = await ask('Choose (0-10): ');
     if (choice === '1') await viewUsers();
     else if (choice === '2') await viewSubmissions();
     else if (choice === '3') await createUser();
@@ -446,6 +522,7 @@ async function mainMenu() {
     else if (choice === '7') await deleteSpecificSubmission();
     else if (choice === '8') await runPlainSql();
     else if (choice === '9') console.log('Tables:', listTables().join(', '));
+    else if (choice === '10') await promoteUser();
     else if (choice === '0') break;
     else console.log('Invalid option.');
   }

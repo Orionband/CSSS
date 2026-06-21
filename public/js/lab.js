@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { securePost, showAlert, apiFetch, NETWORK_ERROR_MESSAGE, isNetworkError, showNetworkError } from './utils.js';
 import { clearBootstrapCache } from './auth.js';
 import { createLabWarnScheduler, ensureNotificationPermission } from './sounds.js';
-import { configureLabUploadMode, stopStreaming } from './upload.js';
+import { configureLabUploadMode, stopStreaming, supportsFileSystemAccess } from './upload.js';
 import { freezeLabTimer, startLabTimer, unfreezeLabTimer } from './lab-timer.js';
 
 export { renderLabResults } from './lab-results.js';
@@ -32,6 +32,27 @@ function showLabIntro() {
     document.getElementById('report')?.classList.add('hidden');
 }
 
+const BROWSER_WARNING_MESSAGE =
+    'This lab uses live streaming, which requires a Chromium-based browser (Chrome, Edge, or Opera). Switch browsers before starting.';
+
+function updateLabBrowserWarning(liveStreaming) {
+    const warning = document.getElementById('lab-browser-warning');
+    const startBtn = document.getElementById('btn-start-lab');
+    if (!warning) return;
+
+    if (liveStreaming && !supportsFileSystemAccess()) {
+        warning.textContent = BROWSER_WARNING_MESSAGE;
+        warning.classList.remove('hidden');
+        startBtn?.setAttribute('disabled', 'disabled');
+        startBtn?.setAttribute('title', 'Requires a Chromium-based browser');
+        return;
+    }
+
+    warning.classList.add('hidden');
+    startBtn?.removeAttribute('disabled');
+    startBtn?.removeAttribute('title');
+}
+
 export async function loadLabInfo(id) {
     setLabLoading(true);
 
@@ -49,6 +70,7 @@ export async function loadLabInfo(id) {
 
         if (!res.ok || data.error) {
             showLabIntro();
+            updateLabBrowserWarning(false);
             document.getElementById('lab-title').innerText = 'Lab';
             if (errorEl) {
                 errorEl.textContent = data.error || 'Lab not found.';
@@ -66,6 +88,7 @@ export async function loadLabInfo(id) {
 
         const startBtn = document.getElementById('btn-start-lab');
         startBtn.onclick = () => startLabSession(id);
+        updateLabBrowserWarning(data.live_streaming === true);
 
         if (data.session_active) {
             clearBootstrapCache();
@@ -76,6 +99,7 @@ export async function loadLabInfo(id) {
         showLabIntro();
     } catch (err) {
         showLabIntro();
+        updateLabBrowserWarning(false);
         document.getElementById('lab-title').innerText = 'Lab';
         if (errorEl) {
             errorEl.textContent = isNetworkError(err) ? NETWORK_ERROR_MESSAGE : 'Failed to load lab.';

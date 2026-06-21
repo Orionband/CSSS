@@ -7,7 +7,6 @@ function playSound(src) {
     try {
         new Audio(src).play().catch(() => {});
     } catch {
-        /* autoplay or missing file */
     }
 }
 
@@ -16,7 +15,6 @@ function sendNotification(title, body) {
     try {
         new Notification(title, { body });
     } catch {
-        /* unsupported or blocked */
     }
 }
 
@@ -67,7 +65,6 @@ export function playWarnSound(thresholdSeconds, totalLimitSeconds) {
     sendNotification('Lab time warning', warnMessageForThreshold(thresholdSeconds, totalLimitSeconds));
 }
 
-/** Lab countdown warnings; each threshold fires once when remaining seconds crosses at or below it. */
 export function createLabWarnScheduler(totalLimitSeconds) {
     if (!Number.isFinite(totalLimitSeconds) || totalLimitSeconds <= 0) {
         return () => {};

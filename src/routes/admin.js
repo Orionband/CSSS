@@ -20,11 +20,12 @@ const { rateLimitPreset, parsePagination } = require("../limits");
 
 const {
   getBestSubmissionsMaps,
-  totalScoreForUser,
+  scoresForUser,
 } = require("../leaderboardScores");
 
 const { getConfig } = require("../config");
 const { invalidateLeaderboardCache } = require("../leaderboardCache");
+const { verifyAdminSensitiveAction } = require("../adminReauth");
 
 const {
   logAccountCreated,
@@ -88,32 +89,13 @@ function parseStrictAdminFlag(value) {
 }
 
 async function verifyAdminCurrentPassword(req, current_password) {
-  if (!current_password) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Current password confirmation is required.",
-    };
-  }
+  return verifyAdminSensitiveAction(req, current_password);
+}
 
-  const adminUser = db
-    .prepare("SELECT password FROM users WHERE id = ?")
-    .get(req.session.userId);
-
-  if (!adminUser) {
-    return { ok: false, status: 401, error: "Unauthorized" };
-  }
-
-  const valid = await bcrypt.compare(
-    String(current_password),
-    adminUser.password,
-  );
-
-  if (!valid) {
-    return { ok: false, status: 403, error: "Current password is incorrect." };
-  }
-
-  return { ok: true };
+function adminConfirmErrorResponse(res, pwdConfirm) {
+  const body = { error: pwdConfirm.error };
+  if (pwdConfirm.code) body.code = pwdConfirm.code;
+  return res.status(pwdConfirm.status).json(body);
 }
 
 function countOwners() {
@@ -150,48 +132,53 @@ const adminOnly = (req, res, next) => {
 router.use(adminOnly);
 
 router.get("/users", (req, res) => {
-  const { limit, offset } = parsePagination(req.query, {
-    defaultLimit: 100,
-    maxLimit: 500,
-  });
+  const fetchAll = req.query.all === "1" || req.query.all === "true";
 
   const total = db.prepare("SELECT COUNT(*) as total FROM users").get().total;
 
-  const users = db
-    .prepare(
-      "SELECT id, username, email, unique_id, is_admin, is_owner, created_at, score_adjustment, withheld FROM users ORDER BY id DESC LIMIT ? OFFSET ?",
-    )
-    .all(limit, offset);
+  const userSql = `SELECT u.id, u.username, u.email, u.unique_id, u.is_admin, u.is_owner, u.created_at, u.score_adjustment, u.withheld,
+        (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id) AS submission_count
+       FROM users u
+       ORDER BY u.id ASC`;
 
-  const countMap = {};
+  let users;
+  let limit;
+  let offset;
 
-  if (users.length > 0) {
-    const placeholders = users.map(() => "?").join(",");
-
-    const ids = users.map((u) => u.id);
-
-    db.prepare(
-      `SELECT user_id, COUNT(*) as c FROM submissions WHERE user_id IN (${placeholders}) GROUP BY user_id`,
-    )
-      .all(...ids)
-      .forEach((row) => {
-        countMap[row.user_id] = row.c;
-      });
+  if (fetchAll) {
+    users = db.prepare(userSql).all();
+    limit = users.length;
+    offset = 0;
+  } else {
+    ({ limit, offset } = parsePagination(req.query, {
+      defaultLimit: 100,
+      maxLimit: 500,
+    }));
+    users = db.prepare(`${userSql} LIMIT ? OFFSET ?`).all(limit, offset);
   }
 
   const cfg = getConfig();
 
   const submissionMaps = getBestSubmissionsMaps();
 
-  users.forEach((u) => {
-    u.submission_count = countMap[u.id] || 0;
-
-    u.leaderboard_total = totalScoreForUser(u.id, cfg, submissionMaps);
+  const usersWithScores = users.map((u) => {
+    const { raw, total: lbTotal } = scoresForUser(u, cfg, submissionMaps);
+    return {
+      ...u,
+      leaderboard_raw: raw,
+      leaderboard_total: lbTotal,
+    };
   });
 
-  const hasMore = offset + users.length < total;
+  const payload = { success: true, users: usersWithScores, total };
 
-  res.json({ success: true, users, total, limit, offset, hasMore });
+  if (!fetchAll) {
+    payload.limit = limit;
+    payload.offset = offset;
+    payload.hasMore = offset + users.length < total;
+  }
+
+  res.json(payload);
 });
 
 router.post("/users", async (req, res) => {
@@ -296,7 +283,7 @@ router.delete("/users/:id", async (req, res) => {
     req.body?.current_password,
   );
   if (!pwdConfirm.ok) {
-    return res.status(pwdConfirm.status).json({ error: pwdConfirm.error });
+    return adminConfirmErrorResponse(res, pwdConfirm);
   }
 
   try {
@@ -364,7 +351,7 @@ router.post("/users/:id/password", async (req, res) => {
   const pwdConfirm = await verifyAdminCurrentPassword(req, current_password);
 
   if (!pwdConfirm.ok) {
-    return res.status(pwdConfirm.status).json({ error: pwdConfirm.error });
+    return adminConfirmErrorResponse(res, pwdConfirm);
   }
 
   let targetUsername = null;
@@ -487,7 +474,7 @@ router.post("/users/:id/score", async (req, res) => {
   );
 
   if (!pwdConfirm.ok) {
-    return res.status(pwdConfirm.status).json({ error: pwdConfirm.error });
+    return adminConfirmErrorResponse(res, pwdConfirm);
   }
 
   const { adjustment, withheld } = req.body;
@@ -586,7 +573,7 @@ router.post("/users/:id/admin", async (req, res) => {
   );
 
   if (!pwdConfirm.ok) {
-    return res.status(pwdConfirm.status).json({ error: pwdConfirm.error });
+    return adminConfirmErrorResponse(res, pwdConfirm);
   }
 
   const targetUser = db

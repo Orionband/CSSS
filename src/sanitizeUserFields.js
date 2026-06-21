@@ -7,7 +7,6 @@ const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const MAX_FIELD_LEN = 100;
 const PRE_MAX_LEN = 10000;
 
-/** Strip controls, normalize Unicode (NFC), remove invisible format chars, trim. */
 function sanitizeUserField(value) {
     if (value === undefined || value === null) return '';
     let s = String(value);
@@ -18,14 +17,12 @@ function sanitizeUserField(value) {
     return s.trim();
 }
 
-/** Username: sanitized, printable ASCII [A-Za-z0-9._-], max 100 chars. */
 function sanitizeUsername(value) {
     const s = sanitizeUserField(value);
     if (!s || s.length > MAX_FIELD_LEN || !USERNAME_RE.test(s)) return '';
     return s;
 }
 
-/** Email: sanitized, ASCII local@domain, max 100 chars. */
 function sanitizeEmail(value) {
     const s = sanitizeUserField(value);
     if (!s || s.length > MAX_FIELD_LEN || !EMAIL_RE.test(s)) return '';

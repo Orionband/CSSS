@@ -3,16 +3,55 @@ const toml = require('toml');
 const path = require('path');
 const { validateConfig } = require('./config/validate');
 
-let config = { labs: [], quizzes: [] };
+let config = { labs: [], quizzes: [], homepage: null };
 let rawConfig = '';
 let configOverride = null;
 
+const CONFIGS_DIR = 'configs';
+
+function resolveConfigPaths(projectRoot) {
+    const configsDir = path.join(projectRoot, CONFIGS_DIR);
+    return {
+        configsDir,
+        labPath: path.join(configsDir, 'lab.conf'),
+        quizPath: path.join(configsDir, 'quiz.conf'),
+        homepagePath: path.join(configsDir, 'homepage.conf'),
+    };
+}
+
+function normalizeBlock(block, defaultTitle) {
+    return {
+        title: (block && block.title) ? String(block.title).trim() : defaultTitle,
+        body: String((block && block.body) || '').trim(),
+    };
+}
+
+function normalizeHomepage(homepage) {
+    if (!homepage || homepage.enabled !== true) return null;
+    return {
+        enabled: true,
+        page_title: String(homepage.page_title || '').trim(),
+        subtitle: String(homepage.subtitle || '').trim(),
+        logo: String(homepage.logo || '/logo.png').trim(),
+        comp_start: homepage.comp_start || null,
+        comp_end: homepage.comp_end || null,
+        period_label: String(homepage.period_label || '').trim(),
+        rules: normalizeBlock(homepage.rules, 'Rules'),
+        prizes: normalizeBlock(homepage.prizes, 'Prizes'),
+        readme: normalizeBlock(homepage.readme, 'README'),
+    };
+}
+
+function isHomepageEnabled(cfg) {
+    return !!(cfg && cfg.homepage && cfg.homepage.enabled === true);
+}
+
 function loadConfigFromDisk(options = {}) {
     const projectRoot = options.projectRoot || path.resolve(__dirname, '..');
-    const next = { labs: [], quizzes: [] };
+    const { labPath, quizPath, homepagePath } = resolveConfigPaths(projectRoot);
+    const next = { labs: [], quizzes: [], homepage: null };
     let nextRaw = '';
 
-    const labPath = path.join(projectRoot, 'lab.conf');
     if (fs.existsSync(labPath)) {
         nextRaw = fs.readFileSync(labPath, 'utf-8');
         if (nextRaw.charCodeAt(0) === 0xFEFF) nextRaw = nextRaw.slice(1);
@@ -20,12 +59,18 @@ function loadConfigFromDisk(options = {}) {
         next.labs = parsedLab.labs || [];
     }
 
-    const quizPath = path.join(projectRoot, 'quiz.conf');
     if (fs.existsSync(quizPath)) {
         let quizRaw = fs.readFileSync(quizPath, 'utf-8');
         if (quizRaw.charCodeAt(0) === 0xFEFF) quizRaw = quizRaw.slice(1);
         const parsedQuiz = toml.parse(quizRaw);
         next.quizzes = parsedQuiz.quizzes || [];
+    }
+
+    if (fs.existsSync(homepagePath)) {
+        let homepageRaw = fs.readFileSync(homepagePath, 'utf-8');
+        if (homepageRaw.charCodeAt(0) === 0xFEFF) homepageRaw = homepageRaw.slice(1);
+        const parsedHomepage = toml.parse(homepageRaw);
+        next.homepage = normalizeHomepage(parsedHomepage.homepage);
     }
 
     const validation = validateConfig(next, {
@@ -51,7 +96,8 @@ function reloadConfig() {
     const loaded = loadConfigFromDisk();
     config = loaded.config;
     rawConfig = loaded.rawConfig;
-    console.log(`CSSS Config loaded. ${config.labs.length} Labs, ${config.quizzes.length} Quizzes.`);
+    const homepageNote = isHomepageEnabled(config) ? ' Homepage enabled.' : '';
+    console.log(`CSSS Config loaded. ${config.labs.length} Labs, ${config.quizzes.length} Quizzes.${homepageNote}`);
 }
 
 function isWindowOpen(challenge) {
@@ -74,6 +120,29 @@ function isWindowOpen(challenge) {
     }
 
     return true;
+}
+
+function getCompetitionWindowStatus(item) {
+    if (!item) return null;
+    if (!item.comp_start && !item.comp_end) return null;
+
+    let startTime = null;
+    let endTime = null;
+
+    if (item.comp_start) {
+        startTime = new Date(item.comp_start).getTime();
+        if (Number.isNaN(startTime)) return null;
+    }
+
+    if (item.comp_end) {
+        endTime = new Date(item.comp_end).getTime();
+        if (Number.isNaN(endTime)) return null;
+    }
+
+    const now = Date.now();
+    if (startTime !== null && now < startTime) return 'upcoming';
+    if (endTime !== null && now > endTime) return 'ended';
+    return 'live';
 }
 
 if (process.env.NODE_ENV !== 'test') {
@@ -99,11 +168,15 @@ function clearConfigOverride() {
 }
 
 module.exports = {
+    CONFIGS_DIR,
     getConfig,
     getRawConfig: () => rawConfig,
     isWindowOpen,
+    getCompetitionWindowStatus,
+    isHomepageEnabled,
     reloadConfig,
     loadConfigFromDisk,
+    resolveConfigPaths,
     warnValidationErrors,
     setConfigOverride,
     clearConfigOverride,

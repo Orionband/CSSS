@@ -5,7 +5,7 @@ const express = require('express');
 const db = require('../database');
 const { elapsedSecondsSince, parseDbTimestamp } = require('../submissionDuration');
 const { getConfig, isWindowOpen } = require('../config');
- const RE2 = require('re2'); // Prevents Catastrophic Backtracking (ReDoS)
+ const RE2 = require('re2');
 const rateLimit = require('express-rate-limit');
 const { rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
 const { logServerError } = require('../auditLog');
@@ -183,12 +183,10 @@ router.get('/asset/:type/:filename', quizAssetLimiter, (req, res) => {
 
     if (!isFileAllowed) return res.status(403).send("Forbidden: No active quiz session for this asset.");
 
-    // Window check applied after the full search, against the specific quiz that granted access
     if (!isWindowOpen(allowingQuiz)) {
         return res.status(403).send("Forbidden: Competition window has closed.");
     }
 
-    // Resolve baseDir canonically so the containment check compares real paths on both sides
     let baseDir;
     try {
         baseDir = fs.realpathSync(path.join(__dirname, '../../protected', type === 'image' ? 'images' : 'pka'));
@@ -196,8 +194,6 @@ router.get('/asset/:type/:filename', quizAssetLimiter, (req, res) => {
         return res.status(500).send("Server configuration error.");
     }
 
-    // realpathSync follows all symlinks to the final target; throws if path doesn't exist.
-    // The containment check then compares two canonical paths, closing the symlink traversal gap.
     let assetPath;
     try {
         assetPath = fs.realpathSync(path.join(baseDir, safeFilename));
@@ -210,7 +206,6 @@ router.get('/asset/:type/:filename', quizAssetLimiter, (req, res) => {
     }
 
     try {
-        // statSync (not lstatSync) — realpathSync already resolved any symlinks above
         const stats = fs.statSync(assetPath);
         if (!stats.isFile()) {
             return res.status(404).send("File not found.");
@@ -231,9 +226,6 @@ router.get('/:id', quizLimiter, (req, res) => {
 
     if (!quiz) return res.status(404).json({ error: "Quiz not found." });
 
-    // Return minimal metadata before the window opens — enough for the UI to show
-    // the quiz exists, but without attempt counts or session details that are only
-    // relevant once the window is active or after it closes.
     if (!isWindowOpen(quiz)) {
         return res.json({ id: quiz.id, window_open: false });
     }

@@ -41,7 +41,6 @@ function createHealthHandler(db, graderPool) {
         }
 
         try {
-            // Liveness only: pool must exist. Queue depth is capacity, not health.
             graderPool.getPendingCount();
             checks.workerPool = graderPool.poolSize > 0;
         } catch {
@@ -143,7 +142,7 @@ function createApp(options = {}) {
     app.use('/api/admin', adminRoutes);
 
     const publicDir = options.publicDir || path.join(__dirname, '../../public');
-    mountPages(app, db, publicDir);
+    mountPages(app, db, publicDir, getConfigFn);
 
     if (!options.testMode) {
         intervalHandles.push(startLabSessionsSweeper(db, getConfigFn, isWindowOpenFn));

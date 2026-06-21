@@ -70,4 +70,17 @@ const closedLabConfig = {
     quizzes: [],
 };
 
-module.exports = { seedUsers, fixtureConfig, closedLabConfig, formatUniqueId };
+const homepageFixture = {
+    enabled: true,
+    page_title: 'Test Event',
+    subtitle: 'Test subtitle',
+    logo: '/logo.png',
+    comp_start: '2099-01-01T00:00:00Z',
+    comp_end: '2099-12-31T00:00:00Z',
+    period_label: 'Test period',
+    rules: { title: 'Rules', body: 'Rule one' },
+    prizes: { title: 'Prizes', body: 'Prize one' },
+    readme: { title: 'README', body: 'Read me' },
+};
+
+module.exports = { seedUsers, fixtureConfig, closedLabConfig, homepageFixture, formatUniqueId };

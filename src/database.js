@@ -158,6 +158,8 @@ function runMigrations(db) {
         ['duration_seconds', 'ALTER TABLE submissions ADD COLUMN duration_seconds INTEGER'],
         ['stream_poll', 'ALTER TABLE submissions ADD COLUMN stream_poll INTEGER DEFAULT 0'],
         ['owner_pid', 'ALTER TABLE active_locks ADD COLUMN owner_pid INTEGER'],
+        ['discord_id', 'ALTER TABLE users ADD COLUMN discord_id TEXT'],
+        ['discord_username', 'ALTER TABLE users ADD COLUMN discord_username TEXT'],
     ];
 
     for (const [col, sql] of migrations) {
@@ -167,6 +169,12 @@ function runMigrations(db) {
         } catch (e) {
             db.prepare(sql).run();
         }
+    }
+
+    try {
+        db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord_id ON users (discord_id) WHERE discord_id IS NOT NULL').run();
+    } catch (_e) {
+        /* ignore if column missing on very old DB mid-migration */
     }
 }
 

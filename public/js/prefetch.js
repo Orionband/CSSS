@@ -53,7 +53,6 @@ async function prefetchApi(key, url) {
         const data = await res.json();
         if (!data.error) writePrefetch(key, data);
     } catch {
-        /* ignore prefetch failures */
     }
 }
 

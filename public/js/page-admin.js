@@ -1,13 +1,41 @@
 import { initShell } from './shell.js';
 import { loadAdminPanel, adminPromptCreateUser, loadAuditLog, loadAnalyticsLabOptions, loadLabAnalytics, bindAdminUserSearch } from './admin.js';
+import { initResizableTable } from './table-resize.js';
+import { showAlert } from './utils.js';
+import { clearBootstrapCache } from './auth.js';
+
+const AUDIT_TABLE_DEFAULT_COL_WIDTHS = [170, 130, 90, 90, 90, 100];
 
 document.addEventListener('DOMContentLoaded', async () => {
+    const params = new URLSearchParams(location.search);
+    const reauthOk = params.get('reauth') === 'ok';
+    const reauthError = params.get('reauth_error');
+    if (reauthOk) clearBootstrapCache();
+
     const boot = await initShell('admin');
     if (!boot) return;
     if (!boot.user?.is_admin) {
         location.href = '/challenges';
         return;
     }
+
+    if (reauthOk) {
+        if (boot.user?.admin_discord_reauth_valid) {
+            await showAlert('Discord verification successful. You can perform sensitive admin actions for the next few minutes.', { title: 'Verified' });
+        } else {
+            await showAlert('Discord verification could not be confirmed. Please verify again.', { title: 'Verification failed' });
+        }
+        params.delete('reauth');
+        const next = params.toString();
+        window.history.replaceState(null, '', next ? `?${next}` : location.pathname);
+    }
+    if (reauthError) {
+        await showAlert(reauthError, { title: 'Verification failed' });
+        params.delete('reauth_error');
+        const next = params.toString();
+        window.history.replaceState(null, '', next ? `?${next}` : location.pathname);
+    }
+
     await loadAdminPanel();
     bindAdminUserSearch();
 
@@ -37,6 +65,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('analytics-lab-select')?.addEventListener('change', () => loadLabAnalytics());
     document.getElementById('tab-admin-audit')?.addEventListener('click', () => {
         showAdminTab('admin-panel-audit', 'tab-admin-audit');
+        initResizableTable(document.getElementById('admin-audit-table'), {
+            storageKey: 'csss-admin-audit-cols',
+            defaults: AUDIT_TABLE_DEFAULT_COL_WIDTHS,
+        });
         loadAuditLog();
     });
     document.getElementById('audit-event-filter')?.addEventListener('change', () => loadAuditLog());

@@ -62,7 +62,12 @@ export async function logout() {
     }
     state.csrfToken = null;
     clearBootstrapCache();
-    location.href = '/';
+    let target = '/';
+    try {
+        const cfg = await fetch('/api/config').then((r) => r.json());
+        if (cfg.options?.homepage_enabled) target = '/login';
+    } catch { /* keep / */ }
+    location.href = target;
 }
 
 export async function bootstrapAuthPage() {
@@ -77,11 +82,32 @@ export async function bootstrapAuthPage() {
             return;
         }
 
-        if (cfgData.options) applyBranding(cfgData.options);
+        if (cfgData.options) {
+            applyBranding(cfgData.options);
+            if (window.csssCacheAuthOptions) window.csssCacheAuthOptions(cfgData.options);
+            if (window.csssApplyAuthMode) {
+                window.csssApplyAuthMode(Boolean(cfgData.options.discord_auth_enabled));
+            }
+        }
+
+        const params = new URLSearchParams(location.search);
+        const discordError = params.get('discord_error');
+        if (discordError) {
+            document.getElementById('auth-error').innerText = discordError;
+            params.delete('discord_error');
+            const next = params.toString();
+            window.history.replaceState(null, '', next ? `?${next}` : location.pathname);
+        }
     } catch {
         try {
             const d = await fetch('/api/config').then(r => r.json());
-            if (d.options) applyBranding(d.options);
+            if (d.options) {
+                applyBranding(d.options);
+                if (window.csssCacheAuthOptions) window.csssCacheAuthOptions(d.options);
+                if (window.csssApplyAuthMode) {
+                    window.csssApplyAuthMode(Boolean(d.options.discord_auth_enabled));
+                }
+            }
         } catch { /* ignore */ }
     }
 }

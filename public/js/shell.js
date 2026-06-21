@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { applyBranding, closeModal, fetchCsrfToken, apiFetch, NETWORK_ERROR_MESSAGE, escapeHtml } from './utils.js';
-import { renderNav } from './nav.js';
+import { renderNav, setupNavUser } from './nav.js';
 import { logout, clearBootstrapCache } from './auth.js';
 import { renderChallengesList } from './challenges.js';
 
@@ -38,16 +38,13 @@ function applyBootstrap(data, activePage) {
     window.isAdmin = !!data.user?.is_admin;
     window.isOwner = !!data.user?.is_owner;
     window.currentUserId = data.user?.id ?? null;
+    window.adminReauthMethod = data.user?.admin_reauth_method || 'password';
+    window.adminDiscordReauthValid = Boolean(data.user?.admin_discord_reauth_valid);
     state.currentUser = data.user?.unique_id || null;
-
-    const uidEl = document.getElementById('uid-display');
-    if (uidEl && data.user?.unique_id) {
-        const name = data.user.username ? `${data.user.username} · ` : '';
-        uidEl.innerText = `${name}${data.user.unique_id}`;
-    }
 
     state.availableChallenges = data.challenges || [];
     if (data.options) applyBranding(data.options);
+    setupNavUser(data.user);
     renderNav(data.options || {}, activePage);
 
     if (activePage === 'challenges') renderChallengesList();
@@ -77,6 +74,8 @@ async function fetchBootstrapFallback() {
             unique_id: meData.unique_id,
             is_admin: meData.is_admin,
             is_owner: meData.is_owner,
+            admin_reauth_method: meData.admin_reauth_method,
+            admin_discord_reauth_valid: meData.admin_discord_reauth_valid,
         },
         challenges: cfgData.challenges || [],
         options: cfgData.options || {},
@@ -136,6 +135,15 @@ function showBootstrapFailureBanner(onRetry) {
     document.getElementById('bootstrap-retry-btn')?.addEventListener('click', onRetry);
 }
 
+async function unauthorizedRedirect() {
+    try {
+        const cfg = await fetch('/api/config').then((r) => r.json());
+        location.href = cfg.options?.homepage_enabled ? '/login' : '/';
+    } catch {
+        location.href = '/';
+    }
+}
+
 async function loadBootstrap(activePage) {
     let data = readBootstrapCache();
     if (data) applyBootstrap(data, activePage);
@@ -144,7 +152,7 @@ async function loadBootstrap(activePage) {
         data = await fetchBootstrapData();
         if (data.unauthorized) {
             clearBootstrapCache();
-            location.href = '/';
+            await unauthorizedRedirect();
             return { ok: false, unauthorized: true };
         }
         writeBootstrapCache(data);

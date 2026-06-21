@@ -28,6 +28,7 @@ function restrictEnvFilePermissions(envPath) {
 const bcrypt = require('bcryptjs');
 const { sanitizeUsername, sanitizeEmail } = require('./src/sanitizeUserFields');
 const { validatePasswordPolicy } = require('./src/passwordPolicy');
+const { parseDiscordOAuthUrl } = require('./src/discordOAuth');
 const { logAccountCreated, logPasswordChanged, logAdminChange, logOwnerGranted } = require('./src/auditLog');
 
 const readline = require('readline').createInterface({
@@ -78,7 +79,10 @@ const askProxyType = async () => {
     const retainXml = await askBool('Retain decompressed .xml grading files on the server?');
     const showLeaderboard = await askBool('Enable global leaderboard?');
     const showHistory = await askBool('Enable History tab for students?');
-    const allowRegistration = await askBool('Allow new user registrations?');
+    const enableDiscordAuth = await askBool('Enable Discord authentication?');
+    const allowRegistration = enableDiscordAuth === 'true'
+        ? 'false'
+        : await askBool('Allow new user registrations?');
     const behindProxy = await askBool('Will CSSS run behind a proxy (not direct public access)?');
 
     const replaceOrAdd = (key, value) => {
@@ -91,6 +95,39 @@ const askProxyType = async () => {
         }
     };
 
+    const removeEnvKey = (key) => {
+        envContent = envContent.replace(new RegExp(`^${key}=.*\n?`, 'gm'), '');
+    };
+
+    let discordSetup = null;
+    if (enableDiscordAuth === 'true') {
+        console.log('\n--- Discord OAuth setup ---');
+        console.log('1. Open https://discord.com/developers/applications and select your app.');
+        console.log('2. OAuth2 → URL Generator: enable the identify scope.');
+        console.log('3. Add this redirect URI (required):');
+        console.log('   https://<your-host>/api/auth/discord/callback');
+        console.log('   (localhost example: http://localhost:10000/api/auth/discord/callback)');
+        console.log('4. Copy the generated OAuth URL and paste it below.\n');
+
+        while (!discordSetup) {
+            const oauthUrl = await question('Paste the generated Discord OAuth URL: ');
+            try {
+                discordSetup = parseDiscordOAuthUrl(oauthUrl);
+            } catch (e) {
+                console.log(`Invalid OAuth URL: ${e.message}`);
+            }
+        }
+
+        let clientSecret = '';
+        while (!clientSecret.trim()) {
+            clientSecret = await question('Discord client secret (DISCORD_CLIENT_SECRET): ');
+            if (!clientSecret.trim()) {
+                console.log('Client secret is required when Discord auth is enabled.');
+            }
+        }
+        discordSetup.clientSecret = clientSecret.trim();
+    }
+
     replaceOrAdd('SESSION_SECRET', secret);
     replaceOrAdd('NODE_ENV', 'production');
     replaceOrAdd('APP_TITLE', appTitle.trim() || 'CSSS ENGINE');
@@ -100,6 +137,20 @@ const askProxyType = async () => {
     replaceOrAdd('SHOW_HISTORY', showHistory);
     replaceOrAdd('ALLOW_REGISTRATION', allowRegistration);
     replaceOrAdd('DEFAULT_MAX_UPLOAD_MB', '50');
+
+    if (enableDiscordAuth === 'true' && discordSetup) {
+        replaceOrAdd('DISCORD_AUTH_ENABLED', 'true');
+        replaceOrAdd('DISCORD_CLIENT_ID', discordSetup.clientId);
+        replaceOrAdd('DISCORD_CLIENT_SECRET', discordSetup.clientSecret);
+        replaceOrAdd('DISCORD_REDIRECT_URI', discordSetup.redirectUri);
+        replaceOrAdd('DISCORD_OAUTH_SCOPE', discordSetup.scope);
+    } else {
+        replaceOrAdd('DISCORD_AUTH_ENABLED', 'false');
+        removeEnvKey('DISCORD_CLIENT_ID');
+        removeEnvKey('DISCORD_CLIENT_SECRET');
+        removeEnvKey('DISCORD_REDIRECT_URI');
+        removeEnvKey('DISCORD_OAUTH_SCOPE');
+    }
 
     let trustProxyValue = null;
     if (behindProxy === 'true') {
@@ -118,6 +169,14 @@ const askProxyType = async () => {
     restrictEnvFilePermissions(envFile);
 
     console.log('\n--- Configuration Saved to .env ---');
+    if (enableDiscordAuth === 'true' && discordSetup) {
+        console.log('DISCORD_AUTH_ENABLED=true');
+        console.log(`DISCORD_REDIRECT_URI=${discordSetup.redirectUri}`);
+        console.log('Password login and registration are disabled; students sign in with Discord.');
+        console.log('(Client ID and secret saved; not shown here.)');
+    } else {
+        console.log('DISCORD_AUTH_ENABLED=false');
+    }
     if (behindProxy === 'true') {
         console.log(`TRUST_PROXY=${trustProxyValue}`);
     } else {
@@ -125,10 +184,13 @@ const askProxyType = async () => {
     }
     console.log('');
 
-    // OWNER ACCOUNT CREATION
-    const createOwner = await askBool('Would you like to create an Owner account now?');
+    const createOwner = enableDiscordAuth !== 'true' && await askBool('Would you like to create an Owner account now?');
+    if (enableDiscordAuth === 'true') {
+        console.log('\nOwner setup: sign in with Discord after starting the server, then use `node tool.js`');
+        console.log('to grant owner/admin to your account.');
+    }
     if (createOwner === 'true') {
-        const db = require('./src/database.js'); // Initializes DB and runs migrations
+        const db = require('./src/database.js');
 
         const adminUser = sanitizeUsername(await question('Owner Username: '));
         const adminEmailRaw = await question('Owner Email [admin@localhost]: ');

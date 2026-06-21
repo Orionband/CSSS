@@ -37,7 +37,9 @@ describe('config load behavior', () => {
             'title = "Lab B"',
             '',
         ].join('\n');
-        fs.writeFileSync(path.join(tmpDir, 'lab.conf'), invalidLab);
+        const configsDir = path.join(tmpDir, 'configs');
+        fs.mkdirSync(configsDir, { recursive: true });
+        fs.writeFileSync(path.join(configsDir, 'lab.conf'), invalidLab);
 
         const loaded = loadConfigFromDisk({ projectRoot: tmpDir });
         assert.equal(loaded.config.labs.length, 2);

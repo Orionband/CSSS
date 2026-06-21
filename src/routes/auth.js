@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
+const { URLSearchParams } = require('url');
 const fs = require('fs');
 const db = require('../database');
 const { sanitizeUsername, sanitizeEmail, MAX_FIELD_LEN } = require('../sanitizeUserFields');
@@ -10,10 +11,18 @@ const { parsePagination, MAX_LEADERBOARD, rateLimitPreset, getConfigNumber, ensu
 const { buildLeaderboard, buildEntryForUser, getBestSubmissionsMaps } = require('../leaderboardScores');
 const { getCachedLeaderboard } = require('../leaderboardCache');
 const { elapsedSecondsSince, chartTimeMs } = require('../submissionDuration');
-const { getConfig, isWindowOpen } = require('../config');
+const { getConfig, isWindowOpen, isHomepageEnabled, getCompetitionWindowStatus } = require('../config');
 const { logAccountCreated } = require('../auditLog');
 const { loginCredentialsStillValid } = require('../loginFreshness');
 const { createLabSessionService } = require('../services/labSessionService');
+const {
+    buildAuthorizeUrl,
+    exchangeCodeForToken,
+    fetchDiscordUser,
+    findOrCreateDiscordUser,
+    getDiscordConfig,
+} = require('../discordOAuth');
+const { getAdminReauthStatus, sanitizeAdminReturnTo } = require('../adminReauth');
 const router = express.Router();
 const { customAlphabet } = require('nanoid');
 const rateLimit = require('express-rate-limit');
@@ -46,6 +55,7 @@ const downloadLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 30
 const configLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
 const bootstrapLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
 const meLimiter = rateLimit(rateLimitPreset({ windowMs: 60 * 1000, max: 120 }));
+const discordAuthLimiter = rateLimit(rateLimitPreset({ windowMs: 5 * 60 * 1000, max: 20 }));
 
 function envBool(name, defaultValue = false) {
     const val = process.env[name];
@@ -66,7 +76,193 @@ router.get('/csrf-token', csrfLimiter, (req, res) => {
     res.json({ csrfToken: ensureCsrfToken(req) });
 });
 
+function discordAuthFailureRedirect(res, message) {
+    const params = new URLSearchParams({ discord_error: message || 'Discord sign-in failed.' });
+    const base = isHomepageEnabled(getConfig()) ? '/login' : '/';
+    return res.redirect(`${base}?${params.toString()}`);
+}
+
+function adminReauthFailureRedirect(res, message) {
+    const params = new URLSearchParams({ reauth_error: message || 'Discord verification failed.' });
+    return res.redirect(`/admin?${params.toString()}`);
+}
+
+function buildSessionUserPayload(session, user) {
+    const reauth = getAdminReauthStatus(session, user);
+    return {
+        id: session.userId,
+        username: user?.username,
+        unique_id: session.uniqueId,
+        is_admin: user && user.is_admin === 1,
+        is_owner: user && user.is_owner === 1,
+        admin_reauth_method: reauth.method,
+        admin_discord_reauth_valid: reauth.discordValid,
+    };
+}
+
+function oauthStateMatches(sessionState, queryState) {
+    if (!sessionState || !queryState || typeof queryState !== 'string') return false;
+    const stateBuf = Buffer.from(queryState);
+    const expectedBuf = Buffer.from(sessionState);
+    try {
+        if (stateBuf.length !== expectedBuf.length) return false;
+        return crypto.timingSafeEqual(stateBuf, expectedBuf);
+    } catch {
+        return false;
+    }
+}
+
+router.get('/auth/discord', discordAuthLimiter, (req, res) => {
+    const config = getDiscordConfig();
+    if (!config.configured) {
+        return res.status(404).send('Discord authentication is not enabled.');
+    }
+
+    const state = crypto.randomBytes(32).toString('hex');
+    req.session.discordOAuthMode = 'login';
+    req.session.discordOAuthState = state;
+    req.session.save((err) => {
+        if (err) return res.status(500).send('Session save failed.');
+        const url = buildAuthorizeUrl({
+            clientId: config.clientId,
+            redirectUri: config.redirectUri,
+            scope: config.scope,
+            state,
+        });
+        res.redirect(url);
+    });
+});
+
+router.get('/auth/discord/callback', discordAuthLimiter, async (req, res) => {
+    const config = getDiscordConfig();
+    if (!config.configured) {
+        return discordAuthFailureRedirect(res, 'Discord authentication is not enabled.');
+    }
+
+    const { code, state, error: oauthError } = req.query;
+    const pendingMode = req.session?.discordOAuthMode || 'login';
+    if (oauthError) {
+        if (pendingMode === 'reauth') {
+            return adminReauthFailureRedirect(res, 'Discord authorization was denied.');
+        }
+        return discordAuthFailureRedirect(res, 'Discord authorization was denied.');
+    }
+
+    const expectedState = req.session?.discordOAuthState;
+    const oauthMode = pendingMode;
+    const reauthUserId = req.session?.discordReauthUserId;
+    const returnTo = sanitizeAdminReturnTo(req.session?.discordReauthReturnTo);
+    delete req.session.discordOAuthState;
+    delete req.session.discordOAuthMode;
+    delete req.session.discordReauthUserId;
+    delete req.session.discordReauthReturnTo;
+
+    if (!code || typeof code !== 'string' || !oauthStateMatches(expectedState, state)) {
+        if (oauthMode === 'reauth') {
+            return adminReauthFailureRedirect(res, 'Invalid Discord callback.');
+        }
+        return discordAuthFailureRedirect(res, 'Invalid Discord callback.');
+    }
+
+    try {
+        const tokenData = await exchangeCodeForToken({
+            code,
+            clientId: config.clientId,
+            clientSecret: config.clientSecret,
+            redirectUri: config.redirectUri,
+        });
+        const profile = await fetchDiscordUser(tokenData.access_token);
+
+        if (oauthMode === 'reauth') {
+            if (!req.session?.userId || reauthUserId !== req.session.userId) {
+                return adminReauthFailureRedirect(res, 'Admin session changed during verification.');
+            }
+            const linked = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(req.session.userId);
+            if (!linked?.discord_id || String(profile.id) !== String(linked.discord_id)) {
+                return adminReauthFailureRedirect(res, 'Discord account does not match the signed-in user.');
+            }
+            req.session.adminDiscordReauthAt = Date.now();
+            req.session.save((saveErr) => {
+                if (saveErr) return adminReauthFailureRedirect(res, 'Session save failed.');
+                const separator = returnTo.includes('?') ? '&' : '?';
+                res.redirect(`${returnTo}${separator}reauth=ok`);
+            });
+            return;
+        }
+
+        let user;
+        try {
+            user = findOrCreateDiscordUser(db, profile);
+        } catch (createErr) {
+            if (createErr.code === 'REGISTRATION_DISABLED') {
+                return discordAuthFailureRedirect(res, createErr.message);
+            }
+            throw createErr;
+        }
+        const loginStartedAt = Date.now();
+
+        req.session.regenerate((err) => {
+            if (err) return discordAuthFailureRedirect(res, 'Login failed.');
+
+            req.session.userId = user.id;
+            req.session.uniqueId = user.unique_id;
+            req.session.authenticatedAt = loginStartedAt;
+            req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+            req.session.save((saveErr) => {
+                if (saveErr) return discordAuthFailureRedirect(res, 'Session save failed.');
+                res.redirect('/challenges');
+            });
+        });
+    } catch {
+        if (oauthMode === 'reauth') {
+            return adminReauthFailureRedirect(res, 'Discord verification failed.');
+        }
+        return discordAuthFailureRedirect(res, 'Discord sign-in failed.');
+    }
+});
+
+router.get('/auth/discord/reauth', discordAuthLimiter, (req, res) => {
+    if (!req.session?.userId) {
+        return res.status(401).send('Not logged in.');
+    }
+
+    const config = getDiscordConfig();
+    if (!config.configured) {
+        return res.status(404).send('Discord authentication is not enabled.');
+    }
+
+    const user = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(req.session.userId);
+    if (!user?.discord_id) {
+        return res.status(400).send('This account is not linked to Discord.');
+    }
+    const adminFlags = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.userId);
+    if (!adminFlags?.is_admin) {
+        return res.status(403).send('Discord verification is only available to admins.');
+    }
+
+    const state = crypto.randomBytes(32).toString('hex');
+    req.session.discordOAuthMode = 'reauth';
+    req.session.discordOAuthState = state;
+    req.session.discordReauthUserId = req.session.userId;
+    req.session.discordReauthReturnTo = sanitizeAdminReturnTo(req.query.return);
+
+    req.session.save((err) => {
+        if (err) return res.status(500).send('Session save failed.');
+        const url = buildAuthorizeUrl({
+            clientId: config.clientId,
+            redirectUri: config.redirectUri,
+            scope: config.scope,
+            state,
+        });
+        res.redirect(url);
+    });
+});
+
 router.post('/register', registerLimiter, async (req, res) => {
+    if (getDiscordConfig().configured) {
+        return res.status(403).json({ error: "Registration is only available through Discord sign-in." });
+    }
+
     if (!envBool('ALLOW_REGISTRATION', false)) {
         return res.status(403).json({ error: "Registration is currently disabled by the administrator." });
     }
@@ -135,13 +331,17 @@ router.post('/logout', (req, res) => {
 
 router.post('/login', loginLimiter, async (req, res) => {
     try {
+        if (getDiscordConfig().configured) {
+            return res.status(403).json({ error: "Sign in with Discord is required." });
+        }
+
         const { username, password } = req.body;
         const userStr = sanitizeUsername(username);
         if (!userStr) {
             return res.status(401).json({ error: "Invalid credentials" });
         }
         const user = db.prepare('SELECT * FROM users WHERE username = ?').get(userStr);
-        const hashToCompare = user ? user.password : getDummyHash();
+        const hashToCompare = user && user.password ? user.password : getDummyHash();
         const loginStartedAt = Date.now();
         const credentialSnapshot = user ? {
             passwordHashAtRead: user.password,
@@ -155,7 +355,7 @@ router.post('/login', loginLimiter, async (req, res) => {
         }
         const passwordMatch = await bcrypt.compare(pwd, hashToCompare);
 
-        if (!user || !passwordMatch) {
+        if (!user || !user.password || !passwordMatch) {
             return res.status(401).json({ error: "Invalid credentials" });
         }
 
@@ -193,26 +393,53 @@ router.post('/login', loginLimiter, async (req, res) => {
 
 router.get('/me', meLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    const user = db.prepare('SELECT username, is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
-    res.json({
-        id: req.session.userId,
-        username: user?.username,
-        unique_id: req.session.uniqueId,
-        is_admin: user && user.is_admin === 1,
-        is_owner: user && user.is_owner === 1,
-    });
+    const user = db.prepare('SELECT username, is_admin, is_owner, password, discord_id FROM users WHERE id = ?').get(req.session.userId);
+    res.json(buildSessionUserPayload(req.session, user));
 });
 
 function appOptions() {
     const fullTitle = process.env.APP_TITLE || 'CSSS ENGINE';
     const parts = fullTitle.split(' ');
+    const discord = getDiscordConfig();
     return {
         show_leaderboard: envBool('SHOW_LEADERBOARD'),
         show_history: envBool('SHOW_HISTORY'),
+        discord_auth_enabled: discord.configured,
+        homepage_enabled: isHomepageEnabled(getConfig()),
         app_title: fullTitle,
         app_title_main: parts[0] || '',
         app_title_highlight: parts.slice(1).join(' ') || '',
     };
+}
+
+function buildHomepageBlock(block) {
+    if (!block || !block.body) return null;
+    return { title: block.title, body: block.body };
+}
+
+function buildHomepagePayload(homepage) {
+    if (!homepage || homepage.enabled !== true) return null;
+
+    const payload = {
+        page_title: homepage.page_title,
+        subtitle: homepage.subtitle,
+        logo: homepage.logo,
+        period: {
+            start: homepage.comp_start,
+            end: homepage.comp_end,
+            label: homepage.period_label || null,
+            status: getCompetitionWindowStatus(homepage),
+        },
+    };
+
+    const rules = buildHomepageBlock(homepage.rules);
+    const prizes = buildHomepageBlock(homepage.prizes);
+    const readme = buildHomepageBlock(homepage.readme);
+    if (rules) payload.rules = rules;
+    if (prizes) payload.prizes = prizes;
+    if (readme) payload.readme = readme;
+
+    return payload;
 }
 
 function labMaxPoints(lab) {
@@ -262,10 +489,13 @@ function buildChallengeList(cfg, userId) {
 router.get('/config', configLimiter, (req, res) => {
     const cfg = getConfig();
     const isAuthenticated = req.session && req.session.userId;
-    res.json({
+    const payload = {
         challenges: isAuthenticated ? buildChallengeList(cfg, req.session.userId) : [],
         options: appOptions(),
-    });
+    };
+    const homepage = buildHomepagePayload(cfg.homepage);
+    if (homepage) payload.homepage = homepage;
+    res.json(payload);
 });
 
 router.get('/bootstrap', bootstrapLimiter, (req, res) => {
@@ -273,17 +503,11 @@ router.get('/bootstrap', bootstrapLimiter, (req, res) => {
         return res.status(401).json({ error: 'Not logged in' });
     }
 
-    const user = db.prepare('SELECT username, is_admin, is_owner FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT username, is_admin, is_owner, password, discord_id FROM users WHERE id = ?').get(req.session.userId);
     const cfg = getConfig();
 
     res.json({
-        user: {
-            id: req.session.userId,
-            username: user?.username,
-            unique_id: req.session.uniqueId,
-            is_admin: user && user.is_admin === 1,
-            is_owner: user && user.is_owner === 1,
-        },
+        user: buildSessionUserPayload(req.session, user),
         csrfToken: ensureCsrfToken(req),
         challenges: buildChallengeList(cfg, req.session.userId),
         options: appOptions(),
@@ -436,7 +660,6 @@ router.get('/lab/:id/download', downloadLimiter, (req, res) => {
         return res.status(400).send("Invalid file configuration.");
     }
 
-    // Resolve baseDir canonically so the containment check compares real paths on both sides
     let baseDir;
     try {
         baseDir = fs.realpathSync(path.join(__dirname, '../../protected/pka'));
@@ -444,8 +667,6 @@ router.get('/lab/:id/download', downloadLimiter, (req, res) => {
         return res.status(500).send("Server configuration error.");
     }
 
-    // realpathSync follows all symlinks to the final target; throws if path doesn't exist.
-    // The containment check then compares two canonical paths, closing the symlink traversal gap.
     let filePath;
     try {
         filePath = fs.realpathSync(path.join(baseDir, safeFilename));
@@ -458,7 +679,6 @@ router.get('/lab/:id/download', downloadLimiter, (req, res) => {
     }
 
     try {
-        // statSync (not lstatSync) — realpathSync already resolved any symlinks above
         const stats = fs.statSync(filePath);
         if (!stats.isFile()) return res.status(404).send("File not found.");
     } catch (e) {
@@ -584,17 +804,24 @@ function formatHistoryRow(sub, cfg) {
     let showDetails = true;
     let showMissed = false;
     const type = sub.type || 'lab';
+    let title = sub.lab_id;
 
     if (type === 'quiz') {
         const qCfg = (cfg.quizzes || []).find(q => q.id === sub.lab_id);
-        showScore = qCfg ? (qCfg.show_score !== false) : true;
-        showDetails = qCfg ? (qCfg.show_corrections !== false) : true;
-        showMissed = qCfg ? (qCfg.show_missed_points === true) : false;
+        if (qCfg) {
+            title = qCfg.title || title;
+            showScore = qCfg.show_score !== false;
+            showDetails = qCfg.show_corrections !== false;
+            showMissed = qCfg.show_missed_points === true;
+        }
     } else {
         const lCfg = (cfg.labs || []).find(l => l.id === sub.lab_id);
-        showScore = lCfg ? (lCfg.show_score !== false) : true;
-        showDetails = lCfg ? (lCfg.show_check_messages !== false) : true;
-        showMissed = lCfg ? (lCfg.show_missed_points === true) : false;
+        if (lCfg) {
+            title = lCfg.title || title;
+            showScore = lCfg.show_score !== false;
+            showDetails = lCfg.show_check_messages !== false;
+            showMissed = lCfg.show_missed_points === true;
+        }
     }
 
     let details = [];
@@ -619,6 +846,7 @@ function formatHistoryRow(sub, cfg) {
     return {
         id: sub.id,
         lab_id: sub.lab_id,
+        title,
         type: type,
         score: showScore ? sub.score : null,
         max_score: showScore ? sub.max_score : null,

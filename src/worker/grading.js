@@ -1,7 +1,6 @@
 const { getXmlValue } = require('./parser');
 const CryptMD5 = require('cryptmd5');
 const crypto = require('crypto');
-// Hard dependency — optional fallback to native RegExp silently re-enables ReDoS
 const RE2 = require('re2');
 
 function safeRegex(pattern, flags) {
@@ -35,19 +34,17 @@ function verifyType5(password, storedHash) {
 function evaluateCondition(device, condition) {
     if (!device) return false;
 
-    // Detect Negation
     let type = condition.type;
     if (typeof type !== 'string' || type.length === 0) return false;
     let isNegated = false;
 
     if (type.endsWith('Not')) {
         isNegated = true;
-        type = type.slice(0, -3); // Remove "Not" suffix
+        type = type.slice(0, -3);
     }
 
     let result = false;
 
-    // --- XML CHECKS ---
     if (type === 'XmlMatch') {
         const actual = getXmlValue(device.xmlRoot, condition.path);
         
@@ -65,7 +62,6 @@ function evaluateCondition(device, condition) {
         }
     }
 
-    // --- CONFIG CHECKS (Standard) ---
     else if (['ConfigMatch', 'ConfigRegex'].includes(type)) {
         const sourceCfg = condition.source === 'startup' ? device.startup : device.running;
         let targetLines = [];
@@ -78,7 +74,6 @@ function evaluateCondition(device, condition) {
             if (blockKey) targetLines = sourceCfg.blocks[blockKey];
         }
 
-        // If lines exist, check them
         if (targetLines) {
             if (type === 'ConfigRegex') {
                 try {
@@ -92,16 +87,12 @@ function evaluateCondition(device, condition) {
         }
     }
 
-    // --- CONFIG CHECKS (Type 5 Password Verification) ---
     else if (type === 'Type5Match') {
         const sourceCfg = condition.source === 'startup' ? device.startup : device.running;
-        
-        // Passwords are typically stored in the global configuration scope
         let targetLines = sourceCfg.global || [];
         let hashToVerify = null;
 
         if (condition.mode === 'device') {
-            // Looking for: enable secret 5 $1$salt$hash...
             const regex = /^enable\s+secret\s+5\s+(\$1\$.+)$/i;
             for (const line of targetLines) {
                 const match = line.match(regex);
@@ -111,9 +102,7 @@ function evaluateCondition(device, condition) {
                 }
             }
         } else if (condition.mode === 'user') {
-            // Looking for: username <user> [privilege X] secret 5 $1$salt$hash...
             const escapedUser = (condition.username || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Use (?:\S+\s+)* instead of .* to avoid catastrophic backtracking on long non-matching lines
             const regex = safeRegex(`^username\\s+${escapedUser}\\s+(?:\\S+\\s+)*secret\\s+5\\s+(\\$1\\$.+)$`, 'i');
             for (const line of targetLines) {
                 const match = line.match(regex);
@@ -131,7 +120,6 @@ function evaluateCondition(device, condition) {
         }
     }
 
-    // Return result (inverted if Negated)
     return isNegated ? !result : result;
 }
 

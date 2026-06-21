@@ -27,6 +27,7 @@ describe('page shell access control', () => {
     });
 
     it('does not serve admin panel HTML without authentication', async () => {
+        // Homepage-enabled admin redirect is covered in homepage-routes.test.js
         const res = await request(ctx.app).get('/admin');
         assert.equal(res.status, 302);
         assert.equal(res.headers.location, '/');

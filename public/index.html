@@ -8,12 +8,13 @@
     <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-    <div id="auth-view" class="centerField">
+    <div id="auth-view" class="centerField auth-loading">
         <h1 id="auth-title"></h1>
         <script src="/js/branding-init.js"></script>
         <small class="auth-subtitle">Using a Cisco Server-sided Scoring System</small>
         <br>
 
+        <div id="password-auth-forms">
         <div id="login-form">
             <h2>Login</h2>
             <input type="text" id="l-user" placeholder="Username" autocomplete="username">
@@ -35,8 +36,16 @@
                 Already have an account? <a id="link-show-login">Login</a>
             </div>
         </div>
+        </div>
+
+        <div id="discord-auth-only" class="hidden">
+            <h2>Sign in</h2>
+            <p class="auth-discord-hint" id="discord-auth-hint">Use Discord to sign in.</p>
+            <a id="btn-discord-login" class="btn-discord" href="/api/auth/discord">Continue with Discord</a>
+        </div>
 
         <div id="auth-error" class="error-msg"></div>
+        <script src="/js/auth-init.js"></script>
     </div>
 
     <script type="module" src="js/auth-main.js"></script>

@@ -84,6 +84,7 @@ function buildEntryForUser(u, allChallenges, labs, quizzes, scoreMap, durationMa
         }
     });
 
+    const rawScore = total;
     if (u.score_adjustment) {
         total += u.score_adjustment;
     }
@@ -101,6 +102,7 @@ function buildEntryForUser(u, allChallenges, labs, quizzes, scoreMap, durationMa
     return {
         username: u.username,
         scores,
+        raw_score: rawScore,
         score_adjustment: u.withheld ? 'W' : adjustment,
         total_score: u.withheld ? 'W' : total,
         total_time_seconds: totalTime > 0 ? totalTime : null,
@@ -135,15 +137,20 @@ function buildLeaderboard(cfg) {
     return { allChallenges, leaderboard: sortLeaderboard(leaderboard) };
 }
 
-function totalScoreForUser(userId, cfg, maps = null) {
+function scoresForUser(user, cfg, maps = null) {
     const { labs, quizzes } = cfg;
     const allChallenges = [...(labs || []), ...(quizzes || [])];
     const { scoreMap, durationMap } = maps || getBestSubmissionsMaps();
+    const entry = buildEntryForUser(user, allChallenges, labs || [], quizzes || [], scoreMap, durationMap);
+    if (!entry) return { raw: 0, total: 0 };
+    return { raw: entry.raw_score, total: entry.total_score };
+}
+
+function totalScoreForUser(userId, cfg, maps = null) {
     const user = db.prepare('SELECT id, username, score_adjustment, withheld FROM users WHERE id = ?').get(userId);
     if (!user) return 0;
-    const entry = buildEntryForUser(user, allChallenges, labs || [], quizzes || [], scoreMap, durationMap);
-    if (!entry || entry.total_score === 'W') return entry ? 'W' : 0;
-    return entry.total_score;
+    const { total } = scoresForUser(user, cfg, maps);
+    return total;
 }
 
 module.exports = {
@@ -151,5 +158,6 @@ module.exports = {
     buildEntryForUser,
     getBestSubmissionsMaps,
     getScoreMap,
+    scoresForUser,
     totalScoreForUser,
 };

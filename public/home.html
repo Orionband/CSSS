@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSSS</title>
+    <link rel="modulepreload" href="/js/utils.js">
+    <link rel="modulepreload" href="/js/nav.js">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <nav class="navBar">
+        <a href="/" class="nav-brand navElement" id="nav-brand"></a>
+        <div class="nav-links-row" id="nav-links-container"></div>
+        <div class="nav-user navElement">
+            <a href="/login" id="nav-login" class="nav-login-link navElement">Login</a>
+            <span id="uid-display" class="hidden"></span>
+            <button type="button" class="logout-btn hidden" id="btn-logout">Logout</button>
+        </div>
+    </nav>
+    <script src="/js/branding-init.js"></script>
+
+    <main class="main-content home-page">
+        <div class="content-wrap home-wrap">
+            <header class="home-header">
+                <img id="home-logo" class="home-logo" src="/logo.png" alt="" width="120" height="120">
+                <h2 id="home-title" class="home-title"></h2>
+                <p id="home-subtitle" class="home-subtitle"></p>
+                <div id="home-period-row" class="home-period-row hidden">
+                    <p id="home-period" class="home-period"></p>
+                    <span id="home-period-status" class="home-period-badge hidden"></span>
+                </div>
+            </header>
+            <section id="home-readme" class="home-block hidden">
+                <h3 id="home-readme-title" class="home-block-title"></h3>
+                <pre id="home-readme-body" class="home-block-body"></pre>
+            </section>
+            <section id="home-rules" class="home-block hidden">
+                <h3 id="home-rules-title" class="home-block-title"></h3>
+                <pre id="home-rules-body" class="home-block-body"></pre>
+            </section>
+            <section id="home-prizes" class="home-block hidden">
+                <h3 id="home-prizes-title" class="home-block-title"></h3>
+                <pre id="home-prizes-body" class="home-block-body"></pre>
+            </section>
+        </div>
+    </main>
+    <script type="module" src="js/page-home.js"></script>
+</body>
+</html>

@@ -5,8 +5,7 @@ protected/images/
 protected/pka/
 grader.db
 logs/
-lab.conf
-quiz.conf
+configs/
 combined.txt
 .env
 grader.db-shm
@@ -27,3 +26,8 @@ graphify-out/
 .eslintcache
 npm-debug.log*
 testing/.perf-last.json
+!captures/.gitkeep
+!configs/.gitkeep
+!protected/images/.gitkeep
+!protected/pka/.gitkeep
+!logs/.gitkeep

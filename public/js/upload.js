@@ -143,7 +143,7 @@ function rejectStreamFilePick() {
     clearPersistedStreamHandle(state.currentChallengeId).catch(() => {});
 }
 
-function supportsFileSystemAccess() {
+export function supportsFileSystemAccess() {
     return 'showOpenFilePicker' in window;
 }
 
@@ -194,7 +194,6 @@ async function clearPersistedStreamHandle(labId) {
         const tx = db.transaction(STREAM_DB_STORE, 'readwrite');
         tx.objectStore(STREAM_DB_STORE).delete(streamDbKey(labId));
     } catch {
-        /* optional persistence */
     }
 }
 
@@ -205,7 +204,6 @@ async function persistStreamHandle(labId, handle) {
         const tx = db.transaction(STREAM_DB_STORE, 'readwrite');
         tx.objectStore(STREAM_DB_STORE).put(handle, streamDbKey(labId));
     } catch {
-        /* optional persistence */
     }
 }
 
@@ -761,7 +759,8 @@ export function configureLabUploadMode(liveStreaming) {
             streamArea?.classList.add('hidden');
             unsupported?.classList.remove('hidden');
             if (unsupported) {
-                unsupported.textContent = 'Live streaming requires a Chromium-based browser (Chrome, Edge, or Opera).';
+                unsupported.textContent =
+                    'Live streaming requires a Chromium-based browser (Chrome, Edge, or Opera). Switch browsers to pick a file and submit.';
             }
             return;
         }
