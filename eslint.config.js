@@ -6,7 +6,6 @@ module.exports = [
         ignores: [
             'node_modules/**',
             'captures/**',
-            '.code-review-graph/**',
             'grader.db*',
             'public/js/chart.min.js',
         ],
