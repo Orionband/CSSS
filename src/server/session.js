@@ -1,5 +1,6 @@
 const session = require('express-session');
 const SqliteStore = require('better-sqlite3-session-store')(session);
+const { timingSafeEqualStrings } = require('../secureCompare');
 
 function createSessionMiddleware(db, sessionSecret, options = {}) {
     const storeOptions = { client: db, expired: { clear: true, intervalMs: 900000 } };
@@ -49,7 +50,7 @@ function createCsrfMiddleware() {
 
         const clientToken = req.headers['x-csrf-token'] || (req.body && req.body._csrf);
 
-        if (!req.session || !req.session.csrfToken || clientToken !== req.session.csrfToken) {
+        if (!req.session || !req.session.csrfToken || !timingSafeEqualStrings(clientToken, req.session.csrfToken)) {
             return res.status(403).json({ error: 'Invalid or missing CSRF token.' });
         }
 
@@ -57,14 +58,27 @@ function createCsrfMiddleware() {
     };
 }
 
+function isDatabaseUnavailableError(err) {
+    if (!err) return false;
+    if (err.code === 'SQLITE_MISUSE') return true;
+    const msg = typeof err.message === 'string' ? err.message : '';
+    return /not open/i.test(msg);
+}
+
 function validateReloadedSession(db, sess) {
     if (!sess?.userId || !sess.uniqueId) return null;
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(sess.userId);
-    if (!user) return null;
-    if (user.password_changed_at && (!sess.authenticatedAt || sess.authenticatedAt < user.password_changed_at)) {
-        return null;
+    try {
+        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(sess.userId);
+        if (!user) return null;
+        if (user.password_changed_at && (!sess.authenticatedAt || sess.authenticatedAt < user.password_changed_at)) {
+            return null;
+        }
+        return user;
+    } catch (err) {
+        if (isDatabaseUnavailableError(err)) return null;
+        console.error('validateReloadedSession:', err.message);
+        throw err;
     }
-    return user;
 }
 
 module.exports = {

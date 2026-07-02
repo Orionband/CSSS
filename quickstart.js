@@ -45,6 +45,17 @@ const askBool = async (query, defaultYes = false) => {
     return trimmed === 'y' ? 'true' : 'false';
 };
 
+const askPort = async (query, defaultPort = 10000) => {
+    while (true) {
+        const ans = (await question(`${query} [${defaultPort}]: `)).trim();
+        const port = ans === '' ? defaultPort : parseInt(ans, 10);
+        if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+            return String(port);
+        }
+        console.log('Please enter a valid port number (1–65535).');
+    }
+};
+
 const askProxyType = async () => {
     console.log('\nWhich proxy setup matches your deployment?');
     console.log('  1) Reverse proxy — terminates TLS or routes on this machine / localhost');
@@ -75,6 +86,7 @@ const askProxyType = async () => {
     console.log("======================================\n");
 
     const appTitle = await question('Application title (shown on login and dashboard) [CSSS ENGINE]: ');
+    const hostPort = await askPort('Host port (browser URL; Docker published port)');
     const retainPka = await askBool('Retain student .pka files on the server?');
     const retainXml = await askBool('Retain decompressed .xml grading files on the server?');
     const showLeaderboard = await askBool('Enable global leaderboard?');
@@ -106,7 +118,7 @@ const askProxyType = async () => {
         console.log('2. OAuth2 → URL Generator: enable the identify scope.');
         console.log('3. Add this redirect URI (required):');
         console.log('   https://<your-host>/api/auth/discord/callback');
-        console.log('   (localhost example: http://localhost:10000/api/auth/discord/callback)');
+        console.log(`   (localhost example: http://localhost:${hostPort}/api/auth/discord/callback)`);
         console.log('4. Copy the generated OAuth URL and paste it below.\n');
 
         while (!discordSetup) {
@@ -131,6 +143,8 @@ const askProxyType = async () => {
     replaceOrAdd('SESSION_SECRET', secret);
     replaceOrAdd('NODE_ENV', 'production');
     replaceOrAdd('APP_TITLE', appTitle.trim() || 'CSSS ENGINE');
+    replaceOrAdd('HOST_PORT', hostPort);
+    replaceOrAdd('PORT', hostPort);
     replaceOrAdd('RETAIN_PKA', retainPka);
     replaceOrAdd('RETAIN_XML', retainXml);
     replaceOrAdd('SHOW_LEADERBOARD', showLeaderboard);
@@ -169,6 +183,7 @@ const askProxyType = async () => {
     restrictEnvFilePermissions(envFile);
 
     console.log('\n--- Configuration Saved to .env ---');
+    console.log(`HOST_PORT=${hostPort} (PORT=${hostPort} for npm start)`);
     if (enableDiscordAuth === 'true' && discordSetup) {
         console.log('DISCORD_AUTH_ENABLED=true');
         console.log(`DISCORD_REDIRECT_URI=${discordSetup.redirectUri}`);
@@ -268,7 +283,7 @@ const askProxyType = async () => {
         }
     }
 
-    console.log('\nSetup Complete! Run `npm start` to boot the server.\n');
+    console.log(`\nSetup Complete! Run \`npm start\` to boot the server at http://localhost:${hostPort}\n`);
     readline.close();
     process.exit(0);
 })();

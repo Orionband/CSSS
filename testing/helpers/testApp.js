@@ -108,10 +108,8 @@ function createTestApp(configOverride = null, options = {}) {
 
             await runtime.stop();
 
-            const defaultDb = require('../../src/database');
-            if (defaultDb !== db && typeof defaultDb.closeDatabase === 'function') {
-                defaultDb.closeDatabase();
-            }
+            const { closeDefaultDatabaseIfOpen } = require('../../src/database');
+            closeDefaultDatabaseIfOpen();
 
             removeDbFiles(dbPath);
             clearConfigOverride();

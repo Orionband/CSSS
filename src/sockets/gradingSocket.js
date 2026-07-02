@@ -13,6 +13,7 @@ const {
 const { resolveUploadMb } = require('../limits');
 const { elapsedSecondsSince } = require('../submissionDuration');
 const { logServerError } = require('../auditLog');
+const { timingSafeEqualStrings } = require('../secureCompare');
 
 const STREAM_MIN_INTERVAL_MS = 115 * 1000;
 
@@ -140,7 +141,7 @@ function mountGradingSockets(io, deps) {
                 const sess = socket.request.session;
                 if (!sess?.userId || sess.userId !== socketUser.id) return;
                 if (!validateReloadedSession(db, sess)) return;
-                if (!packet._csrf || packet._csrf !== sess.csrfToken) return;
+                if (!packet._csrf || !timingSafeEqualStrings(packet._csrf, sess.csrfToken)) return;
 
                 gradeAdmission.cancelWaiting(socket.id, socketUser.id, rawLabId);
             });
@@ -195,7 +196,7 @@ function mountGradingSockets(io, deps) {
                     return socket.emit('err', 'Session expired. Please refresh and log in again.');
                 }
 
-                if (!packet._csrf || packet._csrf !== sess.csrfToken) {
+                if (!packet._csrf || !timingSafeEqualStrings(packet._csrf, sess.csrfToken)) {
                     return socket.emit('err', 'Invalid CSRF token. Please refresh the page.');
                 }
 
@@ -304,7 +305,7 @@ function mountGradingSockets(io, deps) {
                 }
 
                 const clientToken = packet._csrf;
-                if (!clientToken || clientToken !== sess.csrfToken) {
+                if (!clientToken || !timingSafeEqualStrings(clientToken, sess.csrfToken)) {
                     return socket.emit('err', 'Invalid CSRF token. Please refresh the page.');
                 }
 

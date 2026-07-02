@@ -57,6 +57,18 @@ describe('recordLabGradeResult', () => {
         assert.equal(row.max_score, 10);
     });
 
+    it('reconciles quiz-style time expired details without a period', () => {
+        const db = createDatabase(':memory:', { silentChmod: true, skipStaleLockClear: true });
+        const autoCloseDetails = JSON.stringify([{ message: 'Time expired', correct: false }]);
+        const { userId, submissionId, labId } = seedSubmission(db, {
+            status: 'completed',
+            details: autoCloseDetails,
+        });
+        const details = JSON.stringify([{ message: 'graded', passed: true }]);
+        const ok = db.recordLabGradeResult(userId, labId, submissionId, 5, 10, details);
+        assert.equal(ok, true);
+    });
+
     it('does not reconcile a legitimate completed 0/0 grading result', () => {
         const db = createDatabase(':memory:', { silentChmod: true, skipStaleLockClear: true });
         const realZeroDetails = JSON.stringify([

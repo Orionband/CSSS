@@ -16,15 +16,25 @@ function generateUniqueId() {
     return id.match(/.{1,4}/g).join('-');
 }
 
-const dbPath = path.join(__dirname, 'grader.db');
+// CLI arg and shell env only — do not load .env (Docker paths in .env break local runs).
+const dbPathRaw = process.argv[2] || process.env.GRADER_DB_PATH || 'grader.db';
+const dbPath = path.isAbsolute(dbPathRaw) ? dbPathRaw : path.join(__dirname, dbPathRaw);
 
 if (!fs.existsSync(dbPath)) {
-  console.error('grader.db not found in this directory.');
+  console.error(`Database not found: ${dbPath}`);
   process.exit(1);
 }
 
-const db = require('./src/database');
-console.log('Opened grader.db');
+process.env.GRADER_DB_PATH = dbPath;
+const { createDatabase } = require('./src/database');
+const db = createDatabase(dbPath, { silentChmod: true });
+console.log(`Opened ${dbPath}`);
+
+process.on('exit', () => {
+    if (typeof db.closeDatabase === 'function') {
+        db.closeDatabase();
+    }
+});
 
 function backupDb() {
 }

@@ -1,6 +1,16 @@
 const dotenv = require('dotenv');
 dotenv.config();
 
+const { applyDockerSecrets } = require('../docker/secretEnv');
+const { patches: secretPatches, errors: secretErrors } = applyDockerSecrets();
+if (secretErrors.length > 0) {
+    for (const message of secretErrors) {
+        console.error(`FATAL: ${message}`);
+    }
+    process.exit(1);
+}
+Object.assign(process.env, secretPatches);
+
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
     console.error('FATAL: SESSION_SECRET is missing or too short (minimum 32 characters). Refusing to start.');
     console.error('Run `node quickstart.js` to generate a .env file with a secure SESSION_SECRET.');

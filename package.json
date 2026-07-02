@@ -11,7 +11,9 @@
     "format:check": "prettier --check .",
     "check": "npm run lint && npm test",
     "test": "node --test --test-force-exit testing/**/*.test.js",
-    "test:perf": "node --test testing/integration/pka-performance.test.js"
+    "test:perf": "node --test testing/integration/pka-performance.test.js",
+    "docker:tool": "docker compose exec -u csss csss node tool.js",
+    "docker:validate-config": "docker compose exec -u csss csss node scripts/validate-config.js"
   },
   "overrides": {
     "ws": "^8.20.1"

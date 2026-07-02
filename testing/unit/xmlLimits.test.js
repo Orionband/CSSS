@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { validateXmlParseBudget, parseXmlForGrading } = require('../../src/worker/xmlLimits');
+const { validateXmlParseBudget, parseXmlForGrading, sanitizeXmlForGrading } = require('../../src/worker/xmlLimits');
 
 describe('xmlLimits', () => {
     it('validateXmlParseBudget accepts small well-formed XML', () => {
@@ -40,5 +40,64 @@ describe('xmlLimits', () => {
             () => parseXmlForGrading(xml, { maxElements: 2 }),
             /element limit/i,
         );
+    });
+
+    it('sanitizeXmlForGrading rejects DOCTYPE', () => {
+        assert.throws(
+            () => sanitizeXmlForGrading('<!DOCTYPE foo [<!ENTITY x "y">]><root/>'),
+            /Invalid XML/,
+        );
+    });
+
+    it('sanitizeXmlForGrading rejects ENTITY declarations', () => {
+        assert.throws(
+            () => sanitizeXmlForGrading('<root><!ENTITY x "y"></root>'),
+            /Invalid XML/,
+        );
+    });
+
+    it('sanitizeXmlForGrading rejects ENTITY with whitespace after bang', () => {
+        assert.throws(
+            () => sanitizeXmlForGrading('<root><! ENTITY x "y"></root>'),
+            /Invalid XML/,
+        );
+    });
+
+    it('validateXmlParseBudget rejects ENTITY with whitespace after bang', () => {
+        assert.throws(
+            () => validateXmlParseBudget('<root><! ENTITY x "y"></root>'),
+            /Invalid XML structure/,
+        );
+    });
+
+    it('validateXmlParseBudget rejects DOCTYPE in declaration scan', () => {
+        assert.throws(
+            () => validateXmlParseBudget('<!DOCTYPE foo><root/>'),
+            /Invalid XML structure/,
+        );
+    });
+
+    it('sanitizeXmlForGrading rejects DOCTYPE with whitespace after bang', () => {
+        assert.throws(
+            () => sanitizeXmlForGrading('<! DOCTYPE foo><root/>'),
+            /Invalid XML/,
+        );
+    });
+
+    it('validateXmlParseBudget rejects DOCTYPE with whitespace after bang', () => {
+        assert.throws(
+            () => validateXmlParseBudget('<! DOCTYPE foo><root/>'),
+            /Invalid XML structure/,
+        );
+    });
+
+    it('sanitizeXmlForGrading strips non-XML processing instructions', () => {
+        const result = sanitizeXmlForGrading('<?xml version="1.0"?><?foo bar?><root/>');
+        assert.equal(result, '<?xml version="1.0"?><root/>');
+    });
+
+    it('parseXmlForGrading parses XML after stripping non-XML processing instructions', async () => {
+        const obj = await parseXmlForGrading('<?xml version="1.0"?><?foo bar?><root><item>ok</item></root>');
+        assert.equal(obj.root.item[0], 'ok');
     });
 });

@@ -226,7 +226,7 @@ function createApp(options = {}) {
 
         graderPool.shutdown();
         db.releaseAllServerLocks();
-        if (typeof db.closeDatabase === 'function' && options.testMode) {
+        if (typeof db.closeDatabase === 'function') {
             db.closeDatabase();
         }
 

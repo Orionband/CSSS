@@ -54,11 +54,18 @@ export function clearBootstrapCache() {
 
 export async function logout() {
     try {
-        await securePost('/api/logout');
+        const res = await securePost('/api/logout');
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            await showAlert(data.error || 'Logout failed. Please try again.', { title: 'Logout' });
+            return;
+        }
     } catch (err) {
         if (isNetworkError(err)) {
             await showAlert(NETWORK_ERROR_MESSAGE, { title: 'Logout' });
+            return;
         }
+        throw err;
     }
     state.csrfToken = null;
     clearBootstrapCache();

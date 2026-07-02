@@ -32,23 +32,28 @@ describe('sanitizeErrorMessage', () => {
     });
 });
 
-describe('stripDoctypeCompletely', () => {
-    const { stripDoctypeCompletely } = require('../../src/worker/gradeJob');
+describe('sanitizeXmlForGrading', () => {
+    const { sanitizeXmlForGrading } = require('../../src/worker/xmlLimits');
 
     it('rejects XML containing DOCTYPE', () => {
         const xml = '<?xml version="1.0"?><!DOCTYPE foo [<!ELEMENT foo ANY>]><root/>';
-        assert.throws(() => stripDoctypeCompletely(xml), /Invalid XML/);
+        assert.throws(() => sanitizeXmlForGrading(xml), /Invalid XML/);
     });
 
     it('returns quickly for adversarial DOCTYPE internal subset', () => {
         const payload = '<!DOCTYPE x [' + ']"'.repeat(5000) + ']>';
         const start = Date.now();
-        assert.throws(() => stripDoctypeCompletely(`<?xml?>${payload}<root/>`), /Invalid XML/);
+        assert.throws(() => sanitizeXmlForGrading(`<?xml?>${payload}<root/>`), /Invalid XML/);
         assert.ok(Date.now() - start < 500, 'DOCTYPE rejection should not backtrack');
     });
 
-    it('strips ENTITY declarations when no DOCTYPE', () => {
+    it('rejects ENTITY declarations', () => {
         const xml = '<?xml version="1.0"?><!ENTITY x "y"><root/>';
-        assert.equal(stripDoctypeCompletely(xml), '<?xml version="1.0"?><root/>');
+        assert.throws(() => sanitizeXmlForGrading(xml), /Invalid XML/);
+    });
+
+    it('rejects ENTITY with whitespace after bang', () => {
+        const xml = '<?xml version="1.0"?><! ENTITY x "y"><root/>';
+        assert.throws(() => sanitizeXmlForGrading(xml), /Invalid XML/);
     });
 });

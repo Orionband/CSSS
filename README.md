@@ -22,6 +22,80 @@ The UI uses self-hosted **Roboto Mono** (weights 400 and 700) in [`public/fonts/
 3.  `npm start`
 4.  Access at `http://localhost:10000`
 
+## Docker
+
+CSSS can run in a hardened Alpine container. The SQLite database is persistent by default in the Docker named volume `csss-data`; it survives container restarts, rebuilds, and `docker compose down`. Do **not** run `docker compose down -v` unless you intentionally want to delete the database.
+
+First, put your real `lab.conf`, `quiz.conf`, and PKA/image assets in:
+
+- `configs/`
+- `protected/pka/`
+- `protected/images/`
+
+### First Time Only
+
+Create the session secret once. Do **not** run this again unless you intend to invalidate all sessions.
+
+Linux, macOS, or Git Bash:
+
+```bash
+openssl rand -hex 32 > secrets/session_secret
+```
+
+Windows PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 32
+(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($bytes)
+-join ($bytes | ForEach-Object { '{0:x2}' -f $_ }) | Set-Content -NoNewline secrets\session_secret
+```
+
+Then:
+
+```bash
+docker compose up -d --build
+npm run docker:tool
+```
+
+### Start Again Later
+
+```bash
+docker compose up -d --build
+```
+
+The app is available at `http://localhost:10000`. Optional: create a `.env` file (see `.env.example`) to change settings such as `HOST_PORT`, `DISCORD_AUTH_ENABLED`, or feature flags. Docker Compose reads `.env` for those values; secrets still come from `secrets/`.
+
+### Useful Commands
+
+```bash
+docker compose logs -f csss
+docker compose stop
+npm run docker:validate-config
+npm run docker:tool
+```
+
+Docker defaults allow up to ~130s for in-flight grading jobs to finish on stop. Lower `SHUTDOWN_DRAIN_TIMEOUT_MS` and `STOP_GRACE_PERIOD` in `.env` for faster restarts when grading downtime is acceptable.
+
+### Persistence
+
+The database path inside the container is `/data/grader.db`. SQLite WAL files (`grader.db-wal` and `grader.db-shm`) live in the same `/data` volume, so WAL works correctly and stays persistent.
+
+Backups/snapshots are optional copies, not what makes the DB persistent. For a manual backup, stop the container and archive the `csss-data` volume.
+
+### Security Notes
+
+- Secrets are read from `secrets/session_secret`, not `.env`.
+- The container runs as the non-root `csss` user.
+- The root filesystem is read-only; only `/data`, `logs/`, `captures/`, and `/tmp` are writable.
+- `configs/` and `protected/` are mounted read-only.
+- Use one CSSS container per database volume. Do not scale multiple replicas against SQLite.
+- Keep the database volume on a local Docker volume or local disk. Avoid NFS/CIFS/network shares for SQLite.
+- On Windows, use Docker Desktop with the named `csss-data` volume for the database; avoid bind-mounting the DB file.
+
+For Discord OAuth secrets, see [`secrets/README`](secrets/README).
+
+---
+
 Before deploying or editing config, validate TOML files:
 
 ```bash

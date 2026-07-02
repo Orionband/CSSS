@@ -10,7 +10,10 @@ const rateLimit = require('express-rate-limit');
 const { rateLimitPreset, getConfigNumber, ensureArray } = require('../limits');
 const { logServerError } = require('../auditLog');
 const { invalidateLeaderboardCache } = require('../leaderboardCache');
+const { createLabSessionService } = require('../services/labSessionService');
 const router = express.Router();
+
+const labSessionService = createLabSessionService(db);
 
 const quizSubmitLimiter = rateLimit(rateLimitPreset({
     windowMs: 60 * 1000,
@@ -90,6 +93,7 @@ function startQuizSweeper() {
             if (!qCfg) return;
 
             let closeSession = false;
+            let timeLimitClosed = false;
             let reason = "";
             const timeLimitMinutes = getConfigNumber(qCfg.time_limit_minutes, 0);
 
@@ -98,6 +102,7 @@ function startQuizSweeper() {
                 const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
                 if (elapsedSeconds > (timeLimitMinutes * 60) + 2) {
                     closeSession = true;
+                    timeLimitClosed = true;
                     reason = "Auto-closed: Time limit expired.";
                 }
             }
@@ -116,8 +121,8 @@ function startQuizSweeper() {
 
             try {
                 const durationSeconds = elapsedSecondsSince(sub.timestamp);
-                const result = db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
-                  .run(JSON.stringify([{message: reason, correct: false}]), durationSeconds, sub.id);
+                const result = db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ?, time_limit_closed = ? WHERE id = ? AND status = 'in_progress'")
+                  .run(JSON.stringify([{message: reason, correct: false}]), durationSeconds, timeLimitClosed ? 1 : 0, sub.id);
                 if (result.changes > 0) {
                     cacheDirty = true;
                     db.clearQuizMappingsForUser(sub.user_id, sub.lab_id);
@@ -249,7 +254,7 @@ router.get('/:id', quizLimiter, (req, res) => {
 
             if (timeRemaining <= 0) {
                 const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
-                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
+                db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ?, time_limit_closed = 1 WHERE id = ? AND status = 'in_progress'")
                   .run(JSON.stringify([{message: "Time expired", correct: false}]), durationSeconds, existingInProgress.id);
                 clearQuizMappings(req, quiz.id);
                 sessionActive = false;
@@ -298,12 +303,18 @@ router.post('/:id/start', quizStartLimiter, (req, res) => {
 
                 if (timeRemaining <= 0) {
                     const durationSeconds = elapsedSecondsSince(existingInProgress.timestamp);
-                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
+                    db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ?, time_limit_closed = 1 WHERE id = ? AND status = 'in_progress'")
                       .run(JSON.stringify([{message: "Time expired", correct: false}]), durationSeconds, existingInProgress.id);
                     return { error: "Time limit expired for this attempt.", code: 403, clearMappings: true };
                 }
             }
             return { success: true };
+        }
+
+        if (labSessionService.isRestartBlockedAfterTimeLimit(
+            req.session.userId, quiz.id, timeLimitMinutes, maxAttempts, 'quiz'
+        )) {
+            return { error: 'Time limit expired for this quiz.', code: 403 };
         }
 
         let sql = "INSERT INTO submissions (user_id, unique_id, lab_id, status, type) " +
@@ -435,7 +446,7 @@ router.post('/:id/submit', quizSubmitLimiter, (req, res) => {
             const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
             
             if (elapsedSeconds > (submitTimeLimitMinutes * 60) + 2) {
-                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
+                 db.prepare("UPDATE submissions SET status = 'completed', score = 0, details = ?, duration_seconds = ?, time_limit_closed = 1 WHERE id = ? AND status = 'in_progress'")
                       .run(JSON.stringify([{message: "Submission rejected: Time limit expired.", correct: false}]), elapsedSeconds, existingInProgress.id);
                  clearMappingsOnExit = true;
                  return res.status(403).json({ error: "Time limit expired." });

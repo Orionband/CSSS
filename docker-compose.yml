@@ -1,0 +1,54 @@
+services:
+  csss:
+    build: .
+    ports:
+      - "${HOST_PORT:-10000}:10000"
+    environment:
+      GRADER_DB_PATH: /data/grader.db
+      NODE_ENV: production
+      PORT: "10000"
+      APP_TITLE: ${APP_TITLE:-CSSS ENGINE}
+      RETAIN_PKA: ${RETAIN_PKA:-false}
+      RETAIN_XML: ${RETAIN_XML:-false}
+      SHOW_LEADERBOARD: ${SHOW_LEADERBOARD:-false}
+      SHOW_HISTORY: ${SHOW_HISTORY:-false}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      DEFAULT_MAX_UPLOAD_MB: ${DEFAULT_MAX_UPLOAD_MB:-50}
+      MAX_WORKERS: ${MAX_WORKERS:-4}
+      MAX_QUEUE_DEPTH: ${MAX_QUEUE_DEPTH:-50}
+      SHUTDOWN_DRAIN_TIMEOUT_MS: ${SHUTDOWN_DRAIN_TIMEOUT_MS:-130000}
+      SERVER_CLOSE_TIMEOUT_MS: ${SERVER_CLOSE_TIMEOUT_MS:-3000}
+      DISCORD_AUTH_ENABLED: ${DISCORD_AUTH_ENABLED:-false}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      DISCORD_REDIRECT_URI: ${DISCORD_REDIRECT_URI:-}
+      DISCORD_OAUTH_SCOPE: ${DISCORD_OAUTH_SCOPE:-identify}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+    secrets:
+      - session_secret
+    volumes:
+      - csss-data:/data
+      - ./configs:/app/configs:ro
+      - ./protected:/app/protected:ro
+      - ./logs:/app/logs
+      - ./captures:/app/captures
+    read_only: true
+    tmpfs:
+      - /tmp:size=256M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    restart: unless-stopped
+    stop_grace_period: ${STOP_GRACE_PERIOD:-150s}
+
+secrets:
+  session_secret:
+    file: ./secrets/session_secret
+
+volumes:
+  csss-data:

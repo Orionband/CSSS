@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { isAutoClosedLabDetails } = require('./services/labSessionService');
+const { isAutoClosedLabDetails, isTimeLimitAutoClosedDetails } = require('./services/labSessionService');
 
 const LOCK_STALE_MINUTES = 10;
 
@@ -157,6 +157,7 @@ function runMigrations(db) {
         ['is_owner', 'ALTER TABLE users ADD COLUMN is_owner INTEGER DEFAULT 0'],
         ['duration_seconds', 'ALTER TABLE submissions ADD COLUMN duration_seconds INTEGER'],
         ['stream_poll', 'ALTER TABLE submissions ADD COLUMN stream_poll INTEGER DEFAULT 0'],
+        ['time_limit_closed', 'ALTER TABLE submissions ADD COLUMN time_limit_closed INTEGER DEFAULT 0'],
         ['owner_pid', 'ALTER TABLE active_locks ADD COLUMN owner_pid INTEGER'],
         ['discord_id', 'ALTER TABLE users ADD COLUMN discord_id TEXT'],
         ['discord_username', 'ALTER TABLE users ADD COLUMN discord_username TEXT'],
@@ -175,6 +176,29 @@ function runMigrations(db) {
         db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord_id ON users (discord_id) WHERE discord_id IS NOT NULL').run();
     } catch (_e) {
         /* ignore if column missing on very old DB mid-migration */
+    }
+
+    backfillTimeLimitClosed(db);
+}
+
+function backfillTimeLimitClosed(db) {
+    try {
+        const rows = db.prepare(`
+            SELECT id, details FROM submissions
+            WHERE status = 'completed'
+              AND COALESCE(stream_poll, 0) = 0
+              AND COALESCE(time_limit_closed, 0) = 0
+              AND details IS NOT NULL
+        `).all();
+        if (rows.length === 0) return;
+        const mark = db.prepare('UPDATE submissions SET time_limit_closed = 1 WHERE id = ?');
+        for (const row of rows) {
+            if (isTimeLimitAutoClosedDetails(row.details)) {
+                mark.run(row.id);
+            }
+        }
+    } catch (_e) {
+        /* column may not exist on very old DB mid-migration */
     }
 }
 
@@ -211,7 +235,70 @@ function createDatabase(dbPath = process.env.GRADER_DB_PATH || 'grader.db', opti
     return db;
 }
 
-const defaultDb = createDatabase();
+let _defaultDb = null;
 
-module.exports = defaultDb;
-module.exports.createDatabase = createDatabase;
+function getDefaultDatabase() {
+    if (!_defaultDb) {
+        _defaultDb = createDatabase();
+    }
+    return _defaultDb;
+}
+
+function closeDefaultDatabaseIfOpen() {
+    if (!_defaultDb) return;
+    _defaultDb.closeDatabase();
+    _defaultDb = null;
+}
+
+function databasePropertyNames(db) {
+    const keys = new Set();
+    for (let obj = db; obj && obj !== Object.prototype; obj = Object.getPrototypeOf(obj)) {
+        for (const key of Reflect.ownKeys(obj)) {
+            if (typeof key === 'string') keys.add(key);
+        }
+    }
+    return keys;
+}
+
+const moduleApi = {
+    createDatabase,
+    closeDefaultDatabaseIfOpen,
+};
+
+module.exports = new Proxy(moduleApi, {
+    get(target, prop) {
+        if (Object.prototype.hasOwnProperty.call(target, prop)) {
+            return target[prop];
+        }
+        const db = getDefaultDatabase();
+        const value = db[prop];
+        return typeof value === 'function' ? value.bind(db) : value;
+    },
+    has(target, prop) {
+        if (Object.prototype.hasOwnProperty.call(target, prop)) return true;
+        return _defaultDb != null && prop in _defaultDb;
+    },
+    ownKeys(target) {
+        const keys = new Set(Reflect.ownKeys(target));
+        if (_defaultDb) {
+            for (const key of databasePropertyNames(_defaultDb)) keys.add(key);
+        }
+        return [...keys];
+    },
+    getOwnPropertyDescriptor(target, prop) {
+        if (Object.prototype.hasOwnProperty.call(target, prop)) {
+            return Reflect.getOwnPropertyDescriptor(target, prop);
+        }
+        if (_defaultDb != null && prop in _defaultDb) {
+            return { configurable: true, enumerable: true, writable: true };
+        }
+        return undefined;
+    },
+    set(target, prop, value) {
+        if (Object.prototype.hasOwnProperty.call(target, prop)) {
+            return false;
+        }
+        getDefaultDatabase()[prop] = value;
+        return true;
+    },
+});

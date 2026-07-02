@@ -17,11 +17,13 @@ function sweepLabSessionsOnce(db, getConfig, isWindowOpen) {
         if (!labCfg) return;
 
         let closeSession = false;
+        let timeLimitClosed = false;
         let reason = '';
         const timeLimitMinutes = getConfigNumber(labCfg.time_limit_minutes, 0);
 
         if (labSessionService.isTimeExpired(sub.timestamp, timeLimitMinutes)) {
             closeSession = true;
+            timeLimitClosed = true;
             reason = 'Auto-closed: Time limit expired.';
         }
 
@@ -39,8 +41,8 @@ function sweepLabSessionsOnce(db, getConfig, isWindowOpen) {
 
         try {
             const durationSeconds = elapsedSecondsSince(sub.timestamp);
-            const result = db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ? WHERE id = ? AND status = 'in_progress'")
-                .run(JSON.stringify([{ message: reason, device: 'N/A', possible: 0, awarded: 0, passed: false }]), durationSeconds, sub.id);
+            const result = db.prepare("UPDATE submissions SET status = 'completed', score = 0, max_score = 0, details = ?, duration_seconds = ?, time_limit_closed = ? WHERE id = ? AND status = 'in_progress'")
+                .run(JSON.stringify([{ message: reason, device: 'N/A', possible: 0, awarded: 0, passed: false }]), durationSeconds, timeLimitClosed ? 1 : 0, sub.id);
             if (result.changes > 0) cacheDirty = true;
         } finally {
             db.releaseLock(lockKey);

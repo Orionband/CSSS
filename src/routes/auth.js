@@ -393,7 +393,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
 router.get('/me', meLimiter, (req, res) => {
     if (!req.session || !req.session.userId) return res.status(401).json({ error: "Not logged in" });
-    const user = db.prepare('SELECT username, is_admin, is_owner, password, discord_id FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT username, is_admin, is_owner, discord_id FROM users WHERE id = ?').get(req.session.userId);
     res.json(buildSessionUserPayload(req.session, user));
 });
 
@@ -503,7 +503,7 @@ router.get('/bootstrap', bootstrapLimiter, (req, res) => {
         return res.status(401).json({ error: 'Not logged in' });
     }
 
-    const user = db.prepare('SELECT username, is_admin, is_owner, password, discord_id FROM users WHERE id = ?').get(req.session.userId);
+    const user = db.prepare('SELECT username, is_admin, is_owner, discord_id FROM users WHERE id = ?').get(req.session.userId);
     const cfg = getConfig();
 
     res.json({
@@ -585,22 +585,46 @@ router.post('/lab/:id/start', labStartLimiter, (req, res) => {
 
                 if (labSessionService.isTimeExpired(existing.timestamp, timeLimitMinutes)) {
                     labSessionService.closeExpiredSession(existing.id, existing.timestamp, 'Time expired.');
-                    return { error: "Your previous session has expired.", code: 403 };
+                    const expiredError = maxSubmissions > 0
+                        ? 'Your previous session has expired.'
+                        : 'Time limit expired for this lab.';
+                    return { error: expiredError, code: 403 };
                 }
             }
 
             return { resumed: true, timeRemaining };
         }
 
-        if (maxSubmissions > 0) {
-            const count = db.countLabAttempts(req.session.userId, lab.id);
-            if (count >= maxSubmissions) {
-                return { error: "Maximum attempts reached.", code: 403 };
-            }
+        if (labSessionService.isRestartBlockedAfterTimeLimit(req.session.userId, lab.id, timeLimitMinutes, maxSubmissions)) {
+            return { error: 'Time limit expired for this lab.', code: 403 };
         }
 
-        db.prepare("INSERT INTO submissions (user_id, unique_id, lab_id, status, type) VALUES (?, ?, ?, 'in_progress', 'lab')")
-            .run(req.session.userId, req.session.uniqueId, lab.id);
+        let sql = "INSERT INTO submissions (user_id, unique_id, lab_id, status, type) " +
+            "SELECT ?, ?, ?, 'in_progress', 'lab' " +
+            "WHERE NOT EXISTS (SELECT 1 FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab')";
+        const params = [req.session.userId, req.session.uniqueId, lab.id, req.session.userId, lab.id];
+        if (maxSubmissions > 0) {
+            sql += " AND (SELECT COUNT(*) FROM submissions WHERE user_id = ? AND lab_id = ? AND COALESCE(stream_poll, 0) = 0) < ?";
+            params.push(req.session.userId, lab.id, maxSubmissions);
+        }
+        const insertResult = db.prepare(sql).run(...params);
+
+        if (insertResult.changes === 0) {
+            const active = db.prepare(
+                "SELECT id, timestamp FROM submissions WHERE user_id = ? AND lab_id = ? AND status = 'in_progress' AND type = 'lab' ORDER BY id DESC LIMIT 1"
+            ).get(req.session.userId, lab.id);
+            if (active) {
+                let timeRemaining = null;
+                if (timeLimitMinutes > 0) {
+                    timeRemaining = labSessionService.getTimeRemainingSeconds(active.timestamp, timeLimitMinutes);
+                }
+                return { resumed: true, timeRemaining };
+            }
+            if (maxSubmissions > 0 && db.countLabAttempts(req.session.userId, lab.id) >= maxSubmissions) {
+                return { error: "Maximum attempts reached.", code: 403 };
+            }
+            return { error: "Could not start lab session.", code: 409 };
+        }
 
         let timeRemaining = null;
         if (timeLimitMinutes > 0) {

@@ -1,7 +1,6 @@
 node_modules/
 captures/*
 !captures/.gitkeep
-security/
 protected/images/*
 !protected/images/.gitkeep
 protected/pka/*
@@ -13,6 +12,9 @@ configs/*
 !configs/.gitkeep
 combined.txt
 .env
+secrets/*
+!secrets/.gitkeep
+!secrets/README
 grader.db-shm
 grader.db-wal
 THREAT_MODEL.md

@@ -7,13 +7,6 @@ const { evaluateCondition } = require('./grading');
 const { parseXmlForGrading } = require('./xmlLimits');
 const { ensureArray } = require('../limits');
 
-function stripDoctypeCompletely(xml) {
-    if (/<!DOCTYPE/i.test(xml)) {
-        throw new Error('Invalid XML');
-    }
-    return xml.replace(/<!ENTITY\s+[^>]*>/gi, '');
-}
-
 function sanitizeErrorMessage(rawMessage) {
     if (!rawMessage) return "An unknown error occurred during grading.";
 
@@ -148,9 +141,6 @@ async function runGrade(job, emit) {
 
     report("Grading...", 70);
 
-    finalXML = stripDoctypeCompletely(finalXML);
-    finalXML = finalXML.replace(/<\?(?!xml\s)[^?]*\?>/gi, "");
-
     const xmlObj = await parseXmlForGrading(finalXML);
 
     const checks = ensureArray(labConfig.checks);
@@ -248,4 +238,4 @@ async function runGrade(job, emit) {
     return result;
 }
 
-module.exports = { runGrade, sanitizeErrorMessage, stripDoctypeCompletely };
+module.exports = { runGrade, sanitizeErrorMessage };

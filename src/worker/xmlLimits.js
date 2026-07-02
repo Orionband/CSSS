@@ -10,9 +10,28 @@ const DEFAULT_MAX_ATTRIBUTES = 500000;
 const XML2JS_PARSER_OPTIONS = {
     strict: true,
     xmlns: false,
-    entityExpansionMaxDepth: 1,
-    useNullPrototype: true,
 };
+
+function isDoctypeOrEntityAfterBang(xml, bangIndex) {
+    let j = bangIndex + 1;
+    while (j < xml.length && /\s/.test(xml[j])) j++;
+    const tail = xml.slice(j, j + 8).toUpperCase();
+    return tail.startsWith('DOCTYPE') || tail.startsWith('ENTITY');
+}
+
+/**
+ * Reject DTD/entity declarations and strip non-XML processing instructions.
+ * Called before budget scan and parse so all grading paths share the same rules.
+ */
+function sanitizeXmlForGrading(xml) {
+    if (/<!\s*DOCTYPE\b/i.test(xml)) {
+        throw new Error('Invalid XML');
+    }
+    if (/<!\s*ENTITY\b/i.test(xml)) {
+        throw new Error('Invalid XML');
+    }
+    return xml.replace(/<\?(?!xml\s)[^?]*\?>/gi, '');
+}
 
 function countAttributeDelimiters(str, start, end) {
     let count = 0;
@@ -77,6 +96,9 @@ function validateXmlParseBudget(xml, opts = {}) {
                 const end = xml.indexOf(']]>', i + 9);
                 i = end === -1 ? len - 1 : end + 2;
                 continue;
+            }
+            if (isDoctypeOrEntityAfterBang(xml, i + 1)) {
+                throw new Error('Invalid XML structure.');
             }
             const gt = xml.indexOf('>', i + 2);
             i = gt === -1 ? len - 1 : gt;
@@ -157,13 +179,15 @@ function assertHeapBudgetForXmlParse() {
  * Decompressed size is already capped by zlib maxOutputLength in the worker.
  */
 async function parseXmlForGrading(xml, opts = {}) {
-    validateXmlParseBudget(xml, opts);
+    const sanitized = sanitizeXmlForGrading(xml);
+    validateXmlParseBudget(sanitized, opts);
     assertHeapBudgetForXmlParse();
     const parser = new xml2js.Parser(XML2JS_PARSER_OPTIONS);
-    return parser.parseStringPromise(xml);
+    return parser.parseStringPromise(sanitized);
 }
 
 module.exports = {
+    sanitizeXmlForGrading,
     validateXmlParseBudget,
     parseXmlForGrading,
     XML2JS_PARSER_OPTIONS,
